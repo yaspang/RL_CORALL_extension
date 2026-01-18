@@ -205,3 +205,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# RL / ML artifacts
+runs/
+logs/
+checkpoints/
+models/
+*.pt 
+*.pth 
+*.onnx
+*.h5 
+
+# Data (usually large / local)
+data/
+datasets/
+
+# Experiment outputs
+results/ 
+videos/
+*.mp4
+*.gif
