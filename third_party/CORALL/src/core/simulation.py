@@ -50,7 +50,7 @@ def run_colm(risk: Union[float, List[float], np.ndarray],
             dcpa: Union[float, List[float], np.ndarray],
             tcpa: Union[float, List[float], np.ndarray],
             time_idx: int = 0,
-            provider: str = None) -> str:
+            provider: Optional[str] = None) -> str:
     """
     Run COLM decision making for any number of vessels.
     
@@ -76,9 +76,17 @@ def run_colm(risk: Union[float, List[float], np.ndarray],
     tcpa = np.atleast_1d(tcpa)
     
     # Create interpreter instance with specified provider
-    interpreter = COLREGSInterpreter(provider=provider)
+    if COLREGSInterpreter is None:
+        return "COLREGSInterpreter not available"
+    # Pass provider as keyword argument only if it's not None
+    if provider is not None:
+        interpreter = COLREGSInterpreter(provider=provider)
+    else:
+        interpreter = COLREGSInterpreter()
     
     # Create vessel states
+    if VesselState is None:
+        return "VesselState not available"
     vessels = [
         VesselState(float(r), float(d), float(b), float(dc), float(tc))
         for r, d, b, dc, tc in zip(risk, distance, bearing, dcpa, tcpa)
@@ -179,6 +187,8 @@ def run_simulation(args=None, return_data=False):
     Distance_ob, Bearing_ob, Risk = (np.zeros((N, len(Xob))) for _ in range(3))
 
     # Prepare for animation if enabled
+    fig = None
+    writer = None
     if Animation:
         fig, ax = plt.subplots()
         plt.plot(Xwpt, Ywpt, 'ob', Xwpt, Ywpt, ':b', linewidth=1.0)
@@ -186,7 +196,7 @@ def run_simulation(args=None, return_data=False):
         writer = animation.PillowWriter(fps=5)
 
     # Main simulation loop
-    if Animation:
+    if Animation and writer is not None and fig is not None:
         with writer.saving(fig, f"{args.output_dir}/scenario_animation{args.case_number}.gif", dpi=200):
             for i in range(len(x)):
                 # Record current state
@@ -305,7 +315,7 @@ def run_simulation(args=None, return_data=False):
                     Risk[i, :], Vob, i, l
                 )
                 
-                if i % 101 == 0 and i != 0:
+                if i % 101 == 0 and i != 0 and writer is not None:
                     writer.grab_frame()
 
                 t += dt

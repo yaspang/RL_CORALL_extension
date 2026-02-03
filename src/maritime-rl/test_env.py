@@ -1,0 +1,369 @@
+## Minimal single-agent RL wrapper around CORALL's simulation loop to test installation. Prove structural / mechanical compatibility. 
+#
+# Goal: keep CORALL dynamics + planning + obstacle propagation intact, but replace reactive_avoidance with RL_action. 
+#
+
+# import libraries 
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
+import numpy as np
+
+import gymnasium as gym
+from gymnasium import spaces
+
+# import CORALL wrappers
+import sys 
+import os 
+
+def _add_corall_to_syspath():
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(here, '..', '..'))
+    corall_root = os.path.join(repo_root, 'third_party', 'CORALL')
+    if corall_root not in sys.path:
+        sys.path.append(corall_root)
+
+_add_corall_to_syspath()
+
+
+from src.navigation.planning import waypoint_selection, planning
+from src.dynamics.controller import controller 
+from src.dynamics.actuator_modeling import actuator_modeling
+from src.dynamics.vessel_dynamics import vessel_dynamics
+from src.core.integration import integration
+from src.navigation.obstacle_sim import obstacle_sim
+from src.risk_assessment.cpa_calculations import cpa_calculations
+from src.risk_assessment.risk_calculations import risk_calculations
+from src.utils.imazu_cases import get_obstacle_data
+
+
+class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
+    """
+    Baby gymnasium wrapper around CORALL siulation loop to test simulation compatibility with RL frameworks.
+
+    Goal: Keep CORALL planning + controll + dynamics, but replace reactive_avoidance() with an RL action
+    """
+    metadata = {"render_modes": []}
+
+    def __init__(
+            self, 
+            case_number: int = 1,
+            dt: float = 0.2,
+            sim_time: float = 120, 
+            max_avoid_deg: float = 35, 
+            K_obstacles: int = 3, 
+            u_p_cmd: float = 43, 
+            sat_amp_s: float = 20, 
+            collision_dist_m: float = 60,
+            goal_tol_nmi: float = 0.02, 
+            seed: Optional[int] = None,
+    ):
+
+        super().__init__()
+        self.case_number = case_number
+        self.dt = float(dt)
+        self.sim_time = float(sim_time)
+        self.max_steps = int(np.ceil(self.sim_time / self.dt))
+        self.max_avoid_rad = np.deg2rad(max_avoid_deg)
+        self.K = int(K_obstacles)
+
+        self.u_p_cmd = float(u_p_cmd)
+        self.sat_amp_s = float(sat_amp_s)
+
+        self.collision_dist_m = float(collision_dist_m)
+        self.goal_tol_nmi = float(goal_tol_nmi)
+
+        self.np_random = np.random.default_rng(seed)
+
+        # 1D continuous action space: heading change in radians
+        self.action_space = spaces.Box(
+            low=-1,
+            high=1,
+            shape=(1,),
+            dtype=np.float32,
+        )
+
+        # observation dim = 6 + K * 5
+        obs_dim = 6 + self.K * 5
+        self.observation_space = spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(obs_dim,),
+            dtype=np.float32,
+        )
+
+        # sim state
+        self.t = 0
+        self.step_idx = 0
+
+        # ownship state X = [x, y, psi, r, b, u]
+        self.X = np.zeros(6, dtype=float)
+        self.ui_psi1 = 0.0  # previous commanded heading rate
+        self.i_wpt = 1
+
+        # waypoints in nautical miles (interface with CORALL)
+        # simple straight light 
+        self.Xwpt = [0, 40]
+        self.Ywpt = [0, 0]
+
+        # obstacles
+        self.Xob = np.array([], dtype=float)
+        self.Yob = np.array([], dtype=float)
+        self.Vob = np.array([], dtype=float)
+        self.psiob = np.array([], dtype=float)
+
+        # obstacle previous positions for CPA analysis
+        self.Xob_prev = np.array([], dtype=float)
+        self.Yob_prev = np.array([], dtype=float)
+
+        # progress reward helper
+        self.prev_goal_dist = 0
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
+
+        if not hasattr(self, "_printed_path"):
+            print("DEBUG test_env.py path:", os.path.abspath(__file__))
+            self._printed_path = True
+
+        if seed is not None: 
+            self.np_random = np.random.default_rng(seed)
+    
+        # reset sim state
+        self.t = 0
+        self.step_idx = 0
+        self.i_wpt = 1
+        self.ui_psi1 = 0.0  # previous commanded heading rate
+
+        # ownship state X = [x, y, psi, r, b, u]
+        self.X[:] = np.array([0, 0, np.deg2rad(0), 0, 0, 0], dtype=float)
+
+    
+        # load obstacle data from Imazu cases
+        Xob, Yob, Vob, psiob = get_obstacle_data(self.case_number)
+        
+        self.Xob = np.array(Xob, dtype=float)
+        self.Yob = np.array(Yob, dtype=float)
+
+        self.Vob = np.array(Vob, dtype=float)
+        self.psiob = np.array(psiob, dtype=float)
+
+        # debugging safe checks
+        
+        if self.Xob is None or len(self.Xob) == 0:
+            print(f"DEBUG: no obstacles returned for case_number={self.case_number}")
+        else:
+            print("DEBUG Xob[0],Yob[0] =", self.Xob[0], self.Yob[0])
+            
+        
+        
+
+        self._x_prev = float(self.X[0])
+        self._y_prev = float(self.X[1])
+
+        # initialize previous obstacle positions
+        self.Xob_prev = np.copy(self.Xob)
+        self.Yob_prev = np.copy(self.Yob)
+
+        # compute initial distance to goal for reward calculation
+        goal_x = self.Xwpt[-1]
+        goal_y = self.Ywpt[-1]
+        self.prev_goal_dist = np.hypot(goal_x - self.X[0], goal_y - self.X[1])
+        # return initial observation
+        obs = self._get_obs()
+        info = {}
+
+        return obs, info
+
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        # Gymnasium returns: obs, reward, terminated, truncated, info
+
+        self.step_idx += 1
+        self.t += self.dt
+
+        truncated = self.step_idx >= self.max_steps
+
+        # store previous ownship, previous obstacles (for CPA)
+        x_prev, y_prev, psi_prev = float(self.X[0]), float(self.X[1]), float(self.X[2])
+        self._x_prev = x_prev
+        self._y_prev = y_prev 
+        self.Xob_prev = self.Xob.copy()
+        self.Yob_prev = self.Yob.copy()
+
+        # -- planner (kept as CORALL)
+        x_nmi = self.X[0] / 1852
+        y_nmi = self.X[1] / 1852
+        self.i_wpt = waypoint_selection(self.Xwpt, self.Ywpt, x_nmi, y_nmi, self.i_wpt)
+        psi_wp = planning(self.Xwpt, self.Ywpt, x_nmi, y_nmi, self.i_wpt)
+
+        # RL replaces the reactive_avoidance module
+        a = float(np.clip(action[0], -1, 1))  # ensure action is in [-1, 1]
+        psi_avoid = a * self.max_avoid_rad   # scale action to max avoidance angle
+
+        # combine into heading command
+        psi_p = psi_wp + psi_avoid
+
+        # -- controller + actuator + vessel dynamics (kept as CORALL)
+        psi, r, b = float(self.X[2]), float(self.X[3]), float(self.X[4])
+        tau_c, v_c, self.ui_psi1 = controller(psi_p, psi, r, self.u_p_cmd, b, self.ui_psi1, self.dt)
+        tau_ac = actuator_modeling(tau_c, self.sat_amp_s)
+
+        X_dot = vessel_dynamics(self.X.copy(), [tau_ac, v_c])
+        self.X = integration(self.X.copy(), X_dot, self.dt)
+
+        # obstacle propagation (CORALL)
+        self.Xob, self.Yob, self.Vxob, self.Vyob = obstacle_sim(
+            self.Xob, self.Yob, self.Vob, self.psiob, self.dt
+        )
+
+        # risk / CPA for reward + termination
+        risk, dcpa, tcpa, dist, bearing = self._compute_risk(
+            x=float(self.X[0]), y=float(self.X[1]), x_prev=x_prev, y_prev=y_prev, dt=self.dt
+        )
+
+        collision = bool(np.any(dist < self.collision_dist_m))
+        reached_goal = self._dist_to_goal_nmi() < self.goal_tol_nmi
+        terminated = collision or reached_goal
+
+        # starter reward function: delta-progress + risk + collision
+        goal_dist = self._dist_to_goal_nmi()
+        progress = (self.prev_goal_dist - goal_dist)
+        self.prev_goal_dist = goal_dist
+
+        r_progress = 5 * progress
+        r_risk = -2 * float(np.max(risk)) if risk.size else 0.0
+        r_collision = -50 if collision else 0.0
+        r_control = -0.05 * abs(a)
+
+        reward = float(r_progress + r_risk + r_collision + r_control)
+
+        obs = self._get_obs()
+
+        info = {
+            "psi_wp": float(psi_wp) if psi_wp is not None else 0.0, 
+            "psi_avoid": float(psi_avoid),
+            "psi_p": float(psi_p),
+            "risk": risk.astype(float) if risk.size else np.zeros(0, dtype=float), 
+            "risk_max": float(np.max(risk)) if risk.size else 0.0,
+            "collision": collision, 
+            "reached_goal": reached_goal,
+        }
+
+        if not np.all(np.isfinite(obs)):
+            info["bad_obs"] = True
+            # terminate with penalty so training does not explode
+            reward = -200.0
+            terminated = True
+            obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6).astype(np.float32)
+
+
+        # safety: never return non-finite reward
+        if not np.isfinite(reward):
+            reward = -200.0
+            terminated = True
+            info["bad_reward"] = True
+
+
+        if not np.isfinite(obs).all():
+            raise ValueError("Non-finite obs detected")
+        if not np.isfinite(reward):
+            raise ValueError("Non-finite reward detected")
+
+        return obs, reward, terminated, truncated, info
+    
+    def _dist_to_goal_nmi(self) -> float:
+        x_nmi = float(self.X[0]) / 1852
+        y_nmi = float(self.X[1]) / 1852
+        xg = float(self.Xwpt[-1])
+        yg = float(self.Ywpt[-1])
+        return float(np.sqrt((x_nmi - xg) ** 2 + (y_nmi - yg) ** 2))
+
+    def _compute_risk(
+            self, 
+            x: float, 
+            y: float,
+            x_prev: float,
+            y_prev: float,
+            dt: float
+    ):
+        n = len(self.Xob)
+        if n == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+        
+        dist = np.zeros(n, dtype=float)
+        bearing = np.zeros(n, dtype=float)
+        dcpa = np.zeros(n, dtype=float)
+        tcpa = np.zeros(n, dtype=float)
+        risk = np.zeros(n, dtype=float)
+
+        psi = float(self.X[2])
+
+        for j in range(n):
+            dx = float(self.Xob[j] - x) 
+            dy = float(self.Yob[j] - y)
+            dist[j] = np.sqrt(dx**2 + dy**2)
+            los = np.arctan2(dy, dx)
+            bearing[j] = psi - los
+
+            dcpa_j, tcpa_j, vrel_j, alpha_j, psi_vrel_j = cpa_calculations(
+                x, y, x_prev, y_prev, 
+                float(self.Xob[j]), float(self.Yob[j]),
+                float(self.Xob_prev[j]), float(self.Yob_prev[j]), dt ) 
+            
+            dcpa[j] = float(dcpa_j)
+            tcpa[j] = float(tcpa_j)
+            risk[j] = float(risk_calculations(dist[j], dcpa[j], tcpa[j], vrel_j))
+
+        return risk, dcpa, tcpa, dist, bearing
+    
+    def _get_obs(self) -> np.ndarray:
+        # ownship state: x, y, psi, r, b, u
+        own = self.X.astype(np.float32)
+
+        # compute obstacle features, select top-K most "dangerous"
+        if len(self.Xob) == 0: 
+            obs = np.concatenate([own, np.zeros(self.K * 5, dtype=np.float32)])
+            return obs 
+        
+        # compute using current geometry + CPA/risk
+        risk, dcpa, tcpa, dist, bearing = self._compute_risk(
+            x=float(self.X[0]), y=float(self.X[1]), 
+            x_prev=float(self._x_prev), y_prev=float(self._y_prev), dt=self.dt
+
+        )
+
+        # rank obstacles: highest risk first (fallback to closest distance)
+        if risk.size: 
+            idx = np.argsort(-risk)
+        else:
+            idx = np.argsort(dist)
+        
+        feats = []
+        for k in range(self.K):
+            if k < len(self.Xob):
+                j = idx[k]
+                feats.extend([
+                    dist[j], bearing[j], dcpa[j], tcpa[j], risk[j]
+                ])
+            else:
+                feats.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+
+        obs = np.concatenate([own, np.array(feats, dtype=np.float32)])
+        obs = np.nan_to_num(obs, nan=0.0, posinf=1e6, neginf=-1e6).astype(np.float32)
+        return obs
+
+if __name__ == "__main__":
+    # smoke test: random policy rollout
+    env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt = 0.2, sim_time=60, K_obstacles=3)
+    obs, info = env.reset(seed=0)
+    ep_ret = 0.0
+
+    for t in range(500):
+        a = env.action_space.sample()
+        obs, r, term, trunc, info = env.step(a)
+        ep_ret += r
+        if term or trunc:
+            print(f"done at t={t}, return={ep_ret:.2f}, term={term}, trunc={trunc}, info={info}")
+            break
+    
+    print("obs_dim:", obs.shape)
