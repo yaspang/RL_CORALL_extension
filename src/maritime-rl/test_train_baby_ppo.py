@@ -74,8 +74,6 @@ def rollout_policy_make_video_fixed_camera(
     video_path="ppo_rl_case1.avi",
     max_steps=300,
     fps=10,
-    XMIN=-1.0, XMAX=12.0,   # nmi
-    YMIN=-6.0, YMAX=6.0,    # nmi
     deterministic=True
 ):
     """
@@ -97,7 +95,33 @@ def rollout_policy_make_video_fixed_camera(
     obs, info = env.reset(seed=42)
     ep_ret = 0.0
 
+    # compute fixed bounds 
+    x_own0 = float(env.X[0]) / 1852.0
+    y_own0 = float(env.X[1]) / 1852.0
+
+    x_obs0 = np.asarray(env.Xob, dtype=float) / 1852
+    y_obs0 = np.asarray(env.Yob, dtype=float) / 1852
+
+    x_wpt = np.asarray(env.Xwpt, dtype=float)
+    y_wpt = np.asarray(env.Ywpt, dtype=float)
+
+    xs0 = np.concatenate([np.array([x_own0]), x_obs0, x_wpt])
+    ys0 = np.concatenate([np.array([y_own0]), y_obs0, y_wpt])
+    
+    pad_x = 2 
+    pad_y = 5
+
+    # XMIN, XMAX = xs0.min() - pad_x, xs0.max() + pad_x
+    # YMIN, YMAX = ys0.min() - pad_y, ys0.max() + pad_y
+
+    # case 1 over 40 nmi
+    XMIN, XMAX =- 1, 41
+    YMIN, YMAX = -5, 5
+
+
     frames = []
+    x_hist, y_hist = [], []
+
     fig, ax = plt.subplots(figsize=(7, 7), dpi=150)
 
     for t in range(max_steps):
@@ -114,32 +138,52 @@ def rollout_policy_make_video_fixed_camera(
         ax.set_ylim(YMIN, YMAX)
         ax.set_aspect("equal", adjustable="box")
 
-        ax.plot([env.Xob[0]], [env.Yob[0]], "rx", markersize=12)
+        ax.plot(env.Xwpt, env.Ywpt, "k--", linewidth=2)
+        ax.scatter(env.Xwpt, env.Ywpt, marker='o')
+        ax.text(env.Xwpt[0], env.Ywpt[0], 'start')
+        ax.text(env.Xwpt[-1], env.Ywpt[-1], 'goal')
+
+        ax.plot(x_hist, y_hist, linewidth=1.5)
 
         # ---- sizes (use smaller values if ship looks huge) ----
         LOA_own = 0.03   # ~55 m if 0.03 nmi
-        BOL_own = 0.006
-        CPA_own = 0.02
+        BOL_own = 0.006  # nmi
+        CPA_own = 0.02   # nmi
 
-        LOA_ob = np.ones(len(env.Xob)) * 0.03
-        BOL_ob = np.ones(len(env.Xob)) * 0.006
-        CPA_ob = np.ones(len(env.Xob)) * 0.15  # can change size (obstacle CPA radius)
+        LOA_ob = np.ones(len(env.Xob)) * 0.03  # nmi
+        BOL_ob = np.ones(len(env.Xob)) * 0.006 # nmi 
+        CPA_ob = np.ones(len(env.Xob)) * 0.15  # nmi 
 
         Risk = info.get("risk", np.zeros(len(env.Xob), dtype=float))
         Vob = env.Vob
 
-        if t == 0:
-            print("DEBUG: len(Xob)=", len(env.Xob))
-        if len(env.Xob) > 0:
-            print("DEBUG: first obstacle (m):", env.Xob[0], env.Yob[0], "Vob[0]=", float(env.Vob[0]) if len(env.Vob)>0 else None)
-            print("DEBUG: camera nmi bounds:", XMIN, XMAX, YMIN, YMAX)
-            print("DEBUG: first obstacle (nmi):", float(env.Xob[0])/1852.0, float(env.Yob[0])/1852.0)
 
-        if t == 0:
-            print("DEBUG info keys:", list(info.keys()))
+        # if t == 0:
+            # print("DEBUG: len(Xob)=", len(env.Xob))
+        #if len(env.Xob) > 0:
+            #print("DEBUG: first obstacle (m):", env.Xob[0], env.Yob[0], "Vob[0]=", float(env.Vob[0]) if len(env.Vob)>0 else None)
+            #print("DEBUG: camera nmi bounds:", XMIN, XMAX, YMIN, YMAX)
+            #print("DEBUG: first obstacle (nmi):", float(env.Xob[0])/1852.0, float(env.Yob[0])/1852.0)
 
-        # force all obstacles to render as ships 
-        # Vob = np.ones(len(env.Xob), dtype=float) * 1.0   # force "moving" classification
+        #if t == 0:
+            #print("DEBUG info keys:", list(info.keys()))
+
+
+        # plot waypoint line (planned route)
+
+        if t == 0 and len(env.Xob):
+            x_obs = np.asarray(env.Xob)/1852.0
+            y_obs = np.asarray(env.Yob)/1852.0
+            print("obs nmi bounds:", x_obs.min(), x_obs.max(), y_obs.min(), y_obs.max())
+
+        Xob = np.asarray(env.Xob, dtype=float)[:1] / 1852
+        Yob = np.asarray(env.Yob, dtype=float)[:1] / 1852
+        psiob = np.asarray(env.psiob, dtype=float)[:1]
+        Vob = np.asarray(env.Vob, dtype=float)[:1]
+        LOA_ob = np.asarray(LOA_ob, dtype=float)[:1]
+        BOL_ob = np.asarray(BOL_ob, dtype=float)[:1]
+        CPA_ob = np.asarray(CPA_ob, dtype=float)[:1]
+        Risk = np.asarray(Risk, dtype=float)[:1] if len(Risk) else Risk 
 
         # --- Draw one step (this may internally call plt.axis('equal') and autoscale)
         animate_step_dense(
@@ -161,6 +205,9 @@ def rollout_policy_make_video_fixed_camera(
             ax=ax,
         )
 
+        x_hist.append(float(env.X[0]) / 1852)
+        y_hist.append(float(env.X[1]) / 1852)
+
         # ---- CAPTURE ----
         frame = capture_frame_rgba(fig)
         frames.append(frame)
@@ -181,23 +228,21 @@ def main():
 
     # --- 1) determinstic "does action matter?" test
 
-    cases_to_try = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    for case in cases_to_try: 
-        env = CORALL_ReactiveAvoidanceGymEnv(case_number=case, dt=0.2, sim_time=300, K_obstacles=3)
-        ret, steps, term, trunc, info = rollout_fixed_action(env, fixed_action=0, max_steps=5000)
+    env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)
+    ret, steps, term, trunc, info = rollout_fixed_action(env, fixed_action=0, max_steps=5000)
         
-        print(
-            f"[Case {case}] return={ret:.2f}, steps={steps}, trunc={trunc}, "
+    print(
+            f"[Case 1] return={ret:.2f}, steps={steps}, trunc={trunc}, "
             f"risk_max={info.get('risk_max', float('nan')):.3f}, "
             f"collision={info.get('collision')}, goal={info.get('reached_goal')}"
-        )
+    )
 
 
     # --- 2) PPO training (tiny sanity run)
     # use DummyVecEnv for single-process vectorized environment
     
     # case_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    vec_env = DummyVecEnv([lambda: CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=3)])
+    vec_env = DummyVecEnv([lambda: CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)])
 
     model = PPO(
         policy="MlpPolicy",
@@ -213,17 +258,17 @@ def main():
     )
 
     # train for a small number of timesteps to see learning steps
-    model.learn(total_timesteps=200_000)
+    model.learn(total_timesteps=50_000)
 
     # --- 3) evaluate trained policy
-    eval_env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=60, K_obstacles=3)
+    eval_env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)
     mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=10, deterministic=True)
     print(f"\n[PPO eval] mean_return={mean_reward:.2f} +/- {std_reward:.2f} over 10 episodes")
 
     # 4) rollout / visualize trained policy
 
     # Run a rollout that records video/frames using the trained policy
-    ret, steps, info = rollout_policy_make_video_fixed_camera(model, eval_env)
+    ret, steps, info = rollout_policy_make_video_fixed_camera(model, eval_env, max_steps=1500, fps=10)
 
     print(f"[PPO rollout] return={ret:.2f}, steps={steps}, done={info.get('collision') or info.get('reached_goal')}")
             

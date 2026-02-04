@@ -86,13 +86,12 @@ def animate_step_dense(
     animate_ship(x, y, psi, LOA_own * 5, BOL_own * 5, CPA_own, own_col, ax=ax)
 
 
-    # ---- other ships / obstacles (always) ----
+    # ---- Obstacles ----
     moving_col = [
         [0.0, 0.0, 1.0],      # blue
         [1.0, 0.5, 0.0],      # orange
         [0.0, 1.0, 0.0],      # green
         [0.2, 0.8, 0.8],      # cyan
-        [1.0, 0.0, 1.0]       # magenta
     ]
 
     n = len(Xob)
@@ -103,8 +102,7 @@ def animate_step_dense(
         if is_moving: 
             col = moving_col[j % len(moving_col)]
             animate_ship(
-                Xob[j], Yob[j], psiob[j], LOA_ob[j] * 3, BOL_ob[j] * 3, CPA_ob[j], 
-                col, ax
+                Xob[j], Yob[j], psiob[j], LOA_ob[j] * 3, BOL_ob[j] * 3, CPA_ob[j], col, ax
             )
         
         else: 

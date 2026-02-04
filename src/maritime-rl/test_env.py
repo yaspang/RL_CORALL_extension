@@ -50,9 +50,9 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
             self, 
             case_number: int = 1,
             dt: float = 0.2,
-            sim_time: float = 120, 
-            max_avoid_deg: float = 35, 
-            K_obstacles: int = 3, 
+            sim_time: float = 300, 
+            max_colav_deg: float = 25, 
+            K_obstacles: int = 1, 
             u_p_cmd: float = 43, 
             sat_amp_s: float = 20, 
             collision_dist_m: float = 60,
@@ -65,7 +65,10 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         self.dt = float(dt)
         self.sim_time = float(sim_time)
         self.max_steps = int(np.ceil(self.sim_time / self.dt))
-        self.max_avoid_rad = np.deg2rad(max_avoid_deg)
+
+        self.max_colav_rad = np.deg2rad(max_colav_deg)                # rad  ---- saturation limit on heading change
+        self.colav_rate = np.deg2rad(5)                           # rad/s --- how RL can steer for colav
+        self.psi_colav = 0.0                                          # initialize state heading for colav
         self.K = int(K_obstacles)
 
         self.u_p_cmd = float(u_p_cmd)
@@ -133,7 +136,8 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         self.t = 0
         self.step_idx = 0
         self.i_wpt = 1
-        self.ui_psi1 = 0.0  # previous commanded heading rate
+        self.ui_psi1 = 0.0     # previous commanded heading rate
+        self.psi_colav = 0.0   
 
         # ownship state X = [x, y, psi, r, b, u]
         self.X[:] = np.array([0, 0, np.deg2rad(0), 0, 0, 0], dtype=float)
@@ -168,7 +172,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         # compute initial distance to goal for reward calculation
         goal_x = self.Xwpt[-1]
         goal_y = self.Ywpt[-1]
-        self.prev_goal_dist = np.hypot(goal_x - self.X[0], goal_y - self.X[1])
+        self.prev_goal_dist = np.hypot(goal_x - self.X[0], goal_y - self.X[1]) / 1852.0
         # return initial observation
         obs = self._get_obs()
         info = {}
@@ -180,7 +184,6 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
 
         self.step_idx += 1
         self.t += self.dt
-
         truncated = self.step_idx >= self.max_steps
 
         # store previous ownship, previous obstacles (for CPA)
@@ -190,7 +193,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         self.Xob_prev = self.Xob.copy()
         self.Yob_prev = self.Yob.copy()
 
-        # -- planner (kept as CORALL)
+        # -- waypoint planner (kept as CORALL)
         x_nmi = self.X[0] / 1852
         y_nmi = self.X[1] / 1852
         self.i_wpt = waypoint_selection(self.Xwpt, self.Ywpt, x_nmi, y_nmi, self.i_wpt)
@@ -198,10 +201,14 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
 
         # RL replaces the reactive_avoidance module
         a = float(np.clip(action[0], -1, 1))  # ensure action is in [-1, 1]
-        psi_avoid = a * self.max_avoid_rad   # scale action to max avoidance angle
+
+        # update colav heading contribution like a rate command (integrator)
+        dpsi = a * float(self.colav_rate) * float(self.dt)
+        self.psi_colav = float(np.clip(self.psi_colav + dpsi, -float(self.max_colav_rad), float(self.max_colav_rad)))
 
         # combine into heading command
-        psi_p = psi_wp + psi_avoid
+        psi_wp = psi_wp if psi_wp is not None else 0.0
+        psi_p = psi_wp + self.psi_colav
 
         # -- controller + actuator + vessel dynamics (kept as CORALL)
         psi, r, b = float(self.X[2]), float(self.X[3]), float(self.X[4])
@@ -225,23 +232,44 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         reached_goal = self._dist_to_goal_nmi() < self.goal_tol_nmi
         terminated = collision or reached_goal
 
+        # safety shaping 
+        dmin = float(np.min(dist)) if dist.size else 1e9 # meters
+
         # starter reward function: delta-progress + risk + collision
         goal_dist = self._dist_to_goal_nmi()
         progress = (self.prev_goal_dist - goal_dist)
         self.prev_goal_dist = goal_dist
-
+        
+        # progress term
         r_progress = 5 * progress
+
+        # risk penalty 
         r_risk = -2 * float(np.max(risk)) if risk.size else 0.0
-        r_collision = -50 if collision else 0.0
+
+        # distance to obstacle penalty
+        r_distance = -5 * np.exp(-(dmin - 300.0)/50.0) if dist.size else 0.0
+
+        # cross track error penalty (penalize lateral deviation from waypoint path)
+        y_nmi = float(self.X[1]) / 1852.0
+        r_cte = -0.5 * abs(y_nmi)
+
+        # collision term
+        r_collision = -200 if collision else 0.0
+
+        # control term (penalize large steering commands)
         r_control = -0.05 * abs(a)
 
-        reward = float(r_progress + r_risk + r_collision + r_control)
+        # bias magnitude penalty encourages returning to track after passing obstacle
+        r_bias = -0.05 * abs(self.psi_colav)
+
+
+        reward = float(r_progress + r_risk + r_distance + r_cte + r_collision + r_control + r_bias)
 
         obs = self._get_obs()
 
         info = {
             "psi_wp": float(psi_wp) if psi_wp is not None else 0.0, 
-            "psi_avoid": float(psi_avoid),
+            "psi_colav": float(self.psi_colav),
             "psi_p": float(psi_p),
             "risk": risk.astype(float) if risk.size else np.zeros(0, dtype=float), 
             "risk_max": float(np.max(risk)) if risk.size else 0.0,
@@ -354,7 +382,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
 
 if __name__ == "__main__":
     # smoke test: random policy rollout
-    env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt = 0.2, sim_time=60, K_obstacles=3)
+    env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt = 0.2, sim_time=300, K_obstacles=1)
     obs, info = env.reset(seed=0)
     ep_ret = 0.0
 

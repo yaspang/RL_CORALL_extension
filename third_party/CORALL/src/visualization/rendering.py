@@ -39,7 +39,7 @@ def animate_ship(x, y, psi, loa, bol, cpa, color, ax):
     # Vertices for the polygon
     vertices = 4*np.array([[x_ar, y_ar], [x_fr, y_fr], [x_fn, y_fn], [x_fl, y_fl], [x_al, y_al]])
     
-    ship_polygon = Polygon(vertices, closed=True, edgecolor='black', facecolor=color)
+    ship_polygon = Polygon(vertices, closed=True, edgecolor='black', facecolor=color, zorder=2)
 
     ax.add_patch(ship_polygon)  # Add polygon to plot
     
@@ -53,8 +53,8 @@ def animate_static_obstacle(xob, yob, cpa_ob, obs_col, ax):
     if ax is None: 
         ax = plt.gca()
     
-    inner_circle = Circle((xob, yob), cpa_ob, facecolor=obs_col, edgecolor='k')
-    outer_circle = Circle((xob, yob), cpa_ob * 2, fill=False, linestyle=':', linewidth=1.5, edgecolor=obs_col)
+    inner_circle = Circle((xob, yob), cpa_ob, facecolor=obs_col, edgecolor='k', zorder=1)
+    outer_circle = Circle((xob, yob), cpa_ob * 2, fill=False, linestyle=':', linewidth=1.5, edgecolor=obs_col, zorder=1)
     
     ax.add_patch(inner_circle)  # add inner circle
     ax.add_patch(outer_circle)  # add outer circle
