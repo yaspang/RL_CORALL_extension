@@ -20,28 +20,26 @@ from test_env import CORALL_ReactiveAvoidanceGymEnv
 import sys
 import os
 
-def _add_corall_to_syspath():
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, '..', '..'))
-    corall_root = os.path.join(repo_root, 'third_party', 'CORALL')
-    if corall_root not in sys.path:
-        sys.path.append(corall_root)
+from path_setup import ensure_paths
+ensure_paths()
 
-_add_corall_to_syspath()
+#def _add_corall_to_syspath():
+    #here = os.path.dirname(os.path.abspath(__file__))
+    #repo_root = os.path.abspath(os.path.join(here, '..', '..'))
+    #corall_root = os.path.join(repo_root, 'third_party', 'CORALL')
+    #if corall_root not in sys.path:
+        #sys.path.append(corall_root)
 
-from src.visualization.animate import animate_step_dense
-from src.visualization.save_animation import create_video
+#_add_corall_to_syspath()
+
+from visualization.animate import animate_step_dense
+from visualization.save_animation import create_video
 
 
 def capture_frame_rgba(fig) -> np.ndarray:
-    """
-    Render `fig` using an Agg canvas and return an (H, W, 4) uint8 RGBA frame.
-    Works regardless of the currently active matplotlib backend/canvas.
-    """
-    canvas = FigureCanvasAgg(fig)   # force an Agg canvas
-    canvas.draw()
-    w, h = canvas.get_width_height()
-    buf = np.asarray(canvas.buffer_rgba(), dtype=np.uint8)  # (H, W, 4)
+    fig.canvas.draw()
+    w, h = fig.canvas.get_width_height()
+    buf = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)
     return buf.reshape(h, w, 4).copy()
 
 
@@ -115,7 +113,7 @@ def rollout_policy_make_video_fixed_camera(
     # YMIN, YMAX = ys0.min() - pad_y, ys0.max() + pad_y
 
     # case 1 over 40 nmi
-    XMIN, XMAX =- 1, 41
+    XMIN, XMAX = -1, 41
     YMIN, YMAX = -5, 5
 
 
@@ -129,22 +127,15 @@ def rollout_policy_make_video_fixed_camera(
         obs, reward, terminated, truncated, info = env.step(action)
         ep_ret += float(reward)
 
-        # ---- CLEAR FIRST ----
+        # update ownship position history 
+        x_hist.append(float(env.X[0]) / 1852)
+        y_hist.append(float(env.X[1]) / 1852)
+
+        # clear 
         ax.clear()
         ax.set_title(f"PPO rollout (t={t})  return={ep_ret:.2f}")
 
-        ax.set_autoscale_on(False)
-        ax.set_xlim(XMIN, XMAX)
-        ax.set_ylim(YMIN, YMAX)
-        ax.set_aspect("equal", adjustable="box")
-
-        ax.plot(env.Xwpt, env.Ywpt, "k--", linewidth=2)
-        ax.scatter(env.Xwpt, env.Ywpt, marker='o')
-        ax.text(env.Xwpt[0], env.Ywpt[0], 'start')
-        ax.text(env.Xwpt[-1], env.Ywpt[-1], 'goal')
-
-        ax.plot(x_hist, y_hist, linewidth=1.5)
-
+        # draw ships / obstacles first 
         # ---- sizes (use smaller values if ship looks huge) ----
         LOA_own = 0.03   # ~55 m if 0.03 nmi
         BOL_own = 0.006  # nmi
@@ -157,25 +148,7 @@ def rollout_policy_make_video_fixed_camera(
         Risk = info.get("risk", np.zeros(len(env.Xob), dtype=float))
         Vob = env.Vob
 
-
-        # if t == 0:
-            # print("DEBUG: len(Xob)=", len(env.Xob))
-        #if len(env.Xob) > 0:
-            #print("DEBUG: first obstacle (m):", env.Xob[0], env.Yob[0], "Vob[0]=", float(env.Vob[0]) if len(env.Vob)>0 else None)
-            #print("DEBUG: camera nmi bounds:", XMIN, XMAX, YMIN, YMAX)
-            #print("DEBUG: first obstacle (nmi):", float(env.Xob[0])/1852.0, float(env.Yob[0])/1852.0)
-
-        #if t == 0:
-            #print("DEBUG info keys:", list(info.keys()))
-
-
-        # plot waypoint line (planned route)
-
-        if t == 0 and len(env.Xob):
-            x_obs = np.asarray(env.Xob)/1852.0
-            y_obs = np.asarray(env.Yob)/1852.0
-            print("obs nmi bounds:", x_obs.min(), x_obs.max(), y_obs.min(), y_obs.max())
-
+        # single head-on vessel for case 1 imazu 
         Xob = np.asarray(env.Xob, dtype=float)[:1] / 1852
         Yob = np.asarray(env.Yob, dtype=float)[:1] / 1852
         psiob = np.asarray(env.psiob, dtype=float)[:1]
@@ -193,9 +166,9 @@ def rollout_policy_make_video_fixed_camera(
             LOA_own=LOA_own,
             BOL_own=BOL_own,
             CPA_own=CPA_own,
-            Xob=np.asarray(env.Xob, dtype=float) / 1852.0,
-            Yob=np.asarray(env.Yob, dtype=float) / 1852.0,
-            psiob=np.asarray(env.psiob, dtype=float),
+            Xob=Xob,
+            Yob=Yob,
+            psiob=psiob,
             LOA_ob=LOA_ob,
             BOL_ob=BOL_ob,
             CPA_ob=CPA_ob,
@@ -205,20 +178,37 @@ def rollout_policy_make_video_fixed_camera(
             ax=ax,
         )
 
-        x_hist.append(float(env.X[0]) / 1852)
-        y_hist.append(float(env.X[1]) / 1852)
+        # force cmaera rendering 
 
-        # ---- CAPTURE ----
-        frame = capture_frame_rgba(fig)
-        frames.append(frame)
+        ax.set_autoscale_on(False)
+        ax.set_xlim(XMIN, XMAX)
+        ax.set_ylim(YMIN, YMAX)
+        ax.set_aspect("equal", adjustable="box")
+
+        # final overlays 
+        ax.plot(env.Xwpt, env.Ywpt, "k--", linewidth=2, zorder=50)
+        ax.scatter(env.Xwpt, env.Ywpt, marker='o')
+        ax.text(env.Xwpt[0], env.Ywpt[0], 'start')
+        ax.text(env.Xwpt[-1], env.Ywpt[-1], 'goal')
+        ax.plot(x_hist, y_hist, linewidth=1.5, zorder=50)
+        ax.plot([x_hist[-1]], [y_hist[-1]], marker="o", markersize=4, zorder=51)  # current point
+
+        # capture rendered frames 
+        frame_rgba = capture_frame_rgba(fig)
+        frame_bgr = cv2.cvtColor(frame_rgba, cv2.COLOR_RGB2BGR)
+        frames.append(frame_bgr)
 
         if t % 25 == 0:
             x, y, psi, r, b, u = env.X
             print(f"[rollout] step={t:4d}  action={action}  x={x:8.2f} y={y:8.2f} psi={psi:7.3f}  u={u:6.3f} r={r:7.3f}")
 
+        if t == 200:
+            fig.savefig("debug_frame_200.png", dpi=150)
+
         if terminated or truncated:
             break
-
+    
+    fps = int(round(1.0 / env.dt))
     create_video(frames, output_filename=video_path, fps=fps)
     print(f"[rollout end] steps={len(frames)}, return={ep_ret:.2f}, risk_max={info.get('risk_max', 0.0):.3f}")
     plt.close(fig)
@@ -228,7 +218,7 @@ def main():
 
     # --- 1) determinstic "does action matter?" test
 
-    env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)
+    env = CORALL_ReactiveAvoidanceGymEnv(case_number=2, dt=0.2, sim_time=300, K_obstacles=1)
     ret, steps, term, trunc, info = rollout_fixed_action(env, fixed_action=0, max_steps=5000)
         
     print(
@@ -241,8 +231,7 @@ def main():
     # --- 2) PPO training (tiny sanity run)
     # use DummyVecEnv for single-process vectorized environment
     
-    # case_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    vec_env = DummyVecEnv([lambda: CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)])
+    vec_env = DummyVecEnv([lambda: CORALL_ReactiveAvoidanceGymEnv(case_number=2, dt=0.2, sim_time=300, K_obstacles=1)])
 
     model = PPO(
         policy="MlpPolicy",
@@ -258,23 +247,24 @@ def main():
     )
 
     # train for a small number of timesteps to see learning steps
-    model.learn(total_timesteps=50_000)
-
+    model.learn(total_timesteps=200_000)
+ 
     # --- 3) evaluate trained policy
-    eval_env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt=0.2, sim_time=300, K_obstacles=1)
+    eval_env = CORALL_ReactiveAvoidanceGymEnv(case_number=2, dt=0.2, sim_time=300, K_obstacles=1)
     mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=10, deterministic=True)
     print(f"\n[PPO eval] mean_return={mean_reward:.2f} +/- {std_reward:.2f} over 10 episodes")
 
     # 4) rollout / visualize trained policy
 
     # Run a rollout that records video/frames using the trained policy
-    ret, steps, info = rollout_policy_make_video_fixed_camera(model, eval_env, max_steps=1500, fps=10)
+    fps = int(round(1.0 / env.dt))
+    ret, steps, info = rollout_policy_make_video_fixed_camera(model, eval_env, max_steps=1500, fps=fps)
 
     print(f"[PPO rollout] return={ret:.2f}, steps={steps}, done={info.get('collision') or info.get('reached_goal')}")
             
     # save model 
-    model.save("ppo_corall_baby")
-    print("Saved model to ppo_corall_baby.zip")
+    model.save("ppo_corall_baby_case2")
+    print("Saved model to ppo_corall_baby_case2.zip")
 
 if __name__ == "__main__":
     main()

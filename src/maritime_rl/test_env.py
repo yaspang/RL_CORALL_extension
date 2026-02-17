@@ -17,25 +17,18 @@ from gymnasium import spaces
 import sys 
 import os 
 
-def _add_corall_to_syspath():
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, '..', '..'))
-    corall_root = os.path.join(repo_root, 'third_party', 'CORALL')
-    if corall_root not in sys.path:
-        sys.path.append(corall_root)
+from path_setup import ensure_paths
+ensure_paths()
 
-_add_corall_to_syspath()
-
-
-from src.navigation.planning import waypoint_selection, planning
-from src.dynamics.controller import controller 
-from src.dynamics.actuator_modeling import actuator_modeling
-from src.dynamics.vessel_dynamics import vessel_dynamics
-from src.core.integration import integration
-from src.navigation.obstacle_sim import obstacle_sim
-from src.risk_assessment.cpa_calculations import cpa_calculations
-from src.risk_assessment.risk_calculations import risk_calculations
-from src.utils.imazu_cases import get_obstacle_data
+from navigation.planning import waypoint_selection, planning
+from dynamics.controller import controller 
+from dynamics.actuator_modeling import actuator_modeling
+from dynamics.vessel_dynamics import vessel_dynamics
+from core.integration import integration
+from navigation.obstacle_sim import obstacle_sim
+from risk_assessment.cpa_calculations import cpa_calculations
+from risk_assessment.risk_calculations import risk_calculations
+from utils.imazu_cases import get_obstacle_data
 
 
 class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
@@ -172,7 +165,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         # compute initial distance to goal for reward calculation
         goal_x = self.Xwpt[-1]
         goal_y = self.Ywpt[-1]
-        self.prev_goal_dist = np.hypot(goal_x - self.X[0], goal_y - self.X[1]) / 1852.0
+        self.prev_goal_dist = np.hypot(goal_x - self.X[0] / 1852, goal_y - self.X[1] / 1852)
         # return initial observation
         obs = self._get_obs()
         info = {}
@@ -253,6 +246,11 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         y_nmi = float(self.X[1]) / 1852.0
         r_cte = -0.5 * abs(y_nmi)
 
+        # corridor penalty (stay around path, penalize if too far from path)
+        cte = abs(float(self.X[1] / 1852))
+        corridor = 1.0
+        r_corr = -2 * max(0.0, cte - corridor)**2
+
         # collision term
         r_collision = -200 if collision else 0.0
 
@@ -263,7 +261,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         r_bias = -0.05 * abs(self.psi_colav)
 
 
-        reward = float(r_progress + r_risk + r_distance + r_cte + r_collision + r_control + r_bias)
+        reward = float(r_progress + r_risk + r_distance + r_cte + r_corr + r_collision + r_control + r_bias)
 
         obs = self._get_obs()
 
@@ -381,7 +379,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         return obs
 
 if __name__ == "__main__":
-    # smoke test: random policy rollout
+    # test: random policy rollout
     env = CORALL_ReactiveAvoidanceGymEnv(case_number=1, dt = 0.2, sim_time=300, K_obstacles=1)
     obs, info = env.reset(seed=0)
     ep_ret = 0.0
