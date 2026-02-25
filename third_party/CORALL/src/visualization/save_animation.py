@@ -23,14 +23,14 @@ def create_video(frames, output_filename='Artemis.avi', fps=2, quality=95):
     height, width = frames[0].shape[:2]
 
     # Create VideoWriter object
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    fourcc = cv2.VideoWriter.fourcc(*'MJPG')
     out = cv2.VideoWriter(output_filename, fourcc, fps, (width, height))
 
     for frame in frames:
         # Ensure the frame is in the correct format (BGR)
         if len(frame.shape) == 2:
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-        elif frame.shape[2] == 4:
+        elif len(frame.shape) == 3 and frame.shape[2] == 4:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
 
         # Write the frame
