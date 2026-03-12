@@ -24,7 +24,7 @@ from gymnasium import spaces
 from pettingzoo.utils import ParallelEnv
 
 # ensure CORALL repository relative imports resolve
-from maritime_rl.path_setup import ensure_paths
+from .path_setup import ensure_paths
 ensure_paths()
 
 # importing CORALL core modules (from CORALL repo)
@@ -51,7 +51,7 @@ class ObsNorm:
     b_scale: float = 5.0                      # __ bias 
     # CPA scaling 
     dcpa_scale_m: float = 400.0               # m, normalize DCPA
-    tcpa_scale_s: float = 300.0               # s, used to normalize TCPA
+    tcpa_scale_s: float = 300.0               # s, normalize TCPA
     # clip range for safety
     clip: float = 1.0
 
@@ -93,15 +93,17 @@ class MultiShipParallelEnv(ParallelEnv):
         n_heading: int = 7, 
         n_speed: int = 5, 
         max_heading_change_deg: float = 25.0, 
+        ## speed range selected according to typical traffic speeds (9.5m/s) in Imazu cases, but tunable
         u_min: float = 5.0, 
-        u_max: float = 15.0, 
+        u_max: float = 10.0, 
         # ship geometry for collision logic 
         loa_m: float = 175.0,
         # observation normalization
         obs_norm: ObsNorm = ObsNorm(),
         # waypoint generation parameters
+        ## look to comment this out
         ownship_default_route_nmi: Tuple[Tuple[float, ...], Tuple[float, ...]] = ((0.0, 40.0), (0.0, 0.0)), 
-        other_ship_route_len_nmi: float = 40.0,
+        route_len_nmi: float = 40.0,
         seed: Optional[int] = None,
     ): 
 
@@ -124,7 +126,7 @@ class MultiShipParallelEnv(ParallelEnv):
         self.norm = obs_norm
     
         self.ownship_default_route_nmi = ownship_default_route_nmi
-        self.other_ship_route_len_nmi = float(other_ship_route_len_nmi)
+        self.route_len_nmi = float(route_len_nmi)
     
         self.rng = np.random.default_rng(seed)
 
@@ -136,13 +138,13 @@ class MultiShipParallelEnv(ParallelEnv):
         self.agents = [f"ship_{i}" for i in range(self.n_agents)]
         self.possible_agents = self.agents[:]
     
-        # Spaces: MultiDiscrete([heading_idx, speed_idx]) for each agent 
+        # Action Spaces: MultiDiscrete([heading_idx, speed_idx]) for each agent 
         self._action_space = {
 
             agent: spaces.MultiDiscrete([self.n_heading, self.n_speed]) for agent in self.agents
         }
     
-        # Observation space is same for all agents, but depends on n_agents 
+        # Observation Spaces: same for all agents, but depends on n_agents 
         own_dim = 7             # [x, y, sin(psi), cos(psi), r, b, u]
         per_other_dim = 8       # dx, dy, dist, sinB, cosB, dcpa, tcpa, risk -- B is rel. bearing of other ship to ownship
         obs_dim = own_dim + (self.n_agents - 1) * per_other_dim
@@ -157,7 +159,9 @@ class MultiShipParallelEnv(ParallelEnv):
         self.ui_psi1_all = np.zeros(self.n_agents, dtype=float)
         self.Xwpt_all: List[List[float]] = []
         self.Ywpt_all: List[List[float]] = []
-    
+        ## desired cruise / surge speed for each agent dependent on initialized state from Imazu case
+        self.u_des_all = np.zeros(self.n_agents, dtype=float)         
+
         self.t = 0.0
         self.step_count = 0.0
         self.done = False
@@ -167,8 +171,13 @@ class MultiShipParallelEnv(ParallelEnv):
                                 Yob=np.array(Yob, dtype=float), 
                                 Vob=np.array(Vob, dtype=float), 
                                 psiob=np.array(psiob, dtype=float))
-    
+        
+        # Initialize dictionaries for evaluation metrics
+        self.episode_metrics = {}
+        self.prev_done_metrics = {}
 
+    
+    
     # PettingZoo API
     def observation_space(self, agent):
         return self._obs_space[agent]
@@ -181,8 +190,17 @@ class MultiShipParallelEnv(ParallelEnv):
     # Initialization utilities
     # --------------------------------------
 
-    def _init_from_case(self) -> np.ndarray:
-        """Create X_all state from Imazu case defined. Agent 0 is ownship"""
+    def init_from_case(self) -> np.ndarray:
+        """
+        Create X_all state from Imazu case geometry 
+        
+        Agent 0 is ownship
+        
+        Agents 1...K are the former CORALL "obstacle" ships 
+
+        State: [x, y, psi, r, b, u]
+        Units: [m, m, rad, rad/s, ..., m/s] for dynamics, but waypoints in nmi for CORALL planner compatibility
+        """
 
         Xob = self._case_cache["Xob"]
         Yob = self._case_cache["Yob"]
@@ -191,68 +209,97 @@ class MultiShipParallelEnv(ParallelEnv):
 
         X_all = np.zeros((self.n_agents, 6), dtype=float)
 
-        # Ownship default: at origin, heading, intiial surge at mid range (u_min)
-        u0 = float(np.clip(0.5 * (self.u_min + self.u_max), self.u_min, self.u_max))
+        # Ownship initial state
+        ## keep CORALL encounter geometry but set ownship at origin, with zero heading
+        ## set ownship speed as the same nominal traffic speed scale as other ships in the case (for more consistent dynamics across cases and easier learning)
+
+        if len(Vob) > 0:
+            u0 = float(np.clip(Vob[0], self.u_min, self.u_max))
+        else:
+            u0 = float(np.clip(0.5 * (self.u_min + self.u_max), self.u_min, self.u_max))
+        
+        self.u_des_all[0] = u0
         X_all[0, :] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, u0], dtype=float)
 
+        # Other ship initial states
         for j in range(self.n_obstacles):
-            X_all[j+1, :] = np.array([Xob[j], Yob[j], psiob[j], 0.0, 0.0, Vob[j]], dtype=float)
+            u_j = float(np.clip(Vob[j], self.u_min, self.u_max))
+            self.u_des_all[j + 1] = u_j
+            X_all[j + 1, :] = np.array([Xob[j], Yob[j], psiob[j], 0.0, 0.0, u_j], dtype=float)
 
         return X_all
 
-    def _build_waypoints_from_states(self, X_all: np.ndarray) -> Tuple[List[List[float]], List[List[float]]]:
+    def build_waypoints(self, X_all: np.ndarray) -> Tuple[List[List[float]], List[List[float]]]:
         """
-        Build waypoints in nmi (like in CORALL)
+        Build navigation routes in nmi for ALL ships corresponding to initial scenario geometry set by Imazu case
         
-        Ownship: use case-based routing (start with default)
-        Other-ships: keep initial course (straight-line for waypoints)
+        Each agent gets: 
+            waypoint 0 = initial position
+            waypoint 1 = far point in initial heading direction (straight line route for simplicity and CORALL compatibility)
 
+        Keep route structure consistent across ownship and traffic vessels, while using geometry of selected case
         """
         # List over ships -> list over consecutive waypoint coordinates
 
         Xwpt_all: List[List[float]] = []
         Ywpt_all: List[List[float]] = []
 
-        # Ownship route 
-        ## maybe expand this to a per-case table for experiment design 
-        X_own, Y_own = self.ownship_default_route_nmi 
-        Xwpt_all.append(list(X_own))
-        Ywpt_all.append(list(Y_own))
+        # Use the same route length parameter for every ship 
+        route_len_nmi = float(self.route_len_nmi)
 
-        # Other ship routes: straight line
-        for k in range(1, self.n_agents):
-            x_m, y_m, psi = X_all[k, 0], X_all[k, 1], X_all[k, 2]
-            x0 = x_m / NMI
-            y0 = y_m / NMI
-            x1 = x0 + self.other_ship_route_len_nmi * float(np.cos(psi))
-            y1 = y0 + self.other_ship_route_len_nmi * float(np.sin(psi))
-            Xwpt_all.append([x0, x1])
-            Ywpt_all.append([y0, y1])
+        for k in range(self.n_agents):
+            x_m = float(X_all[k, 0])
+            y_m = float(X_all[k, 1])
+            psi = float(X_all[k, 2])
+
+            x0_nmi = x_m / NMI
+            y0_nmi = y_m / NMI
+
+            x1_nmi = x0_nmi + route_len_nmi * float(np.cos(psi))
+            y1_nmi = y0_nmi + route_len_nmi * float(np.sin(psi))
+
+            Xwpt_all.append([x0_nmi, x1_nmi])
+            Ywpt_all.append([y0_nmi, y1_nmi])
 
         return Xwpt_all, Ywpt_all
 
 
-    def _reset_internal_state(self):
+    def reset_internal_state(self):
         self.t = 0.0
         self.step_count = 0
         self.done = False
 
-        self.X_all = self._init_from_case()
+        self.X_all = self.init_from_case()
         self.prev_X_all = self.X_all.copy()
 
-        self.i_wpt_all = np.zeros(self.n_agents, dtype=int)
         self.ui_psi1_all = np.zeros(self.n_agents, dtype=float)
 
-        self.Xwpt_all, self.Ywpt_all = self._build_waypoints_from_states(self.X_all)
+        self.Xwpt_all, self.Ywpt_all = self.build_waypoints(self.X_all)
+
+        # make each ship immediately aim for downstream route instead of initial location 
+        self.i_wpt_all = np.array([1 if len(self.Xwpt_all[k]) > 1 else 0 for k in range(self.n_agents)], dtype=int)
 
     
     def reset(self, seed=None, options=None):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
-        self._reset_internal_state()
-
+        self.reset_internal_state()
         observations = {agent: self._get_observation(k) for k, agent in enumerate(self.agents)}
         infos = {agent: {} for agent in self.agents}
+
+        # define metrics dictionary to store episode metrics for each agent, which can be used for logging and evaluation 
+        # at the end of the episode in step() when done=True
+        self.episode_metrics = {
+            agent: {
+                "path_length_m": 0.0,
+                "min_dcpa_m": float("inf"),
+                "risk_exposure": 0.0,
+                "collision": 0,
+                "success": 0,
+                "completion_time_s": None,
+            } for agent in self.agents
+        }
+
         return observations, infos
 
     def step(self, actions: Dict[str, np.ndarray]):
@@ -307,7 +354,10 @@ class MultiShipParallelEnv(ParallelEnv):
             x_nmi, y_nmi = x_m / NMI, y_m / NMI
 
             i_wpt_k = waypoint_selection(Xwpt_k, Ywpt_k, x_nmi, y_nmi, i_wpt_k)
-            self.i_wpt_all[k] = i_wpt_k
+            self.i_wpt_all[k] = np.array(
+                [1 if len(self.Xwpt_all[k]) > 1 else 0 for k in range(self.n_agents)], 
+                dtype=int
+            )
 
             psi_wp = planning(Xwpt_k, Ywpt_k, x_nmi, y_nmi, i_wpt_k)
             psi_ref[k] = float(psi_wp + delta_heading)
@@ -329,7 +379,7 @@ class MultiShipParallelEnv(ParallelEnv):
             self.X_all[k, :] = integration(self.X_all[k, :], X_dot, self.dt)
 
         # 3) rewards / dones
-        rewards, terminations, truncations, infos = self._compute_rewards_and_dones()
+        rewards, terminations, truncations, infos = self.compute_rewards_and_dones()
 
         # time / truncation handling
         self.t += self.dt
@@ -445,7 +495,9 @@ class MultiShipParallelEnv(ParallelEnv):
 
     # -------------------------------
     # Rewards / terminations 
-    def _compute_rewards_and_dones(self):
+    # -------------------------------
+
+    def compute_rewards_and_dones(self):
         rewards: Dict[str, float] = {}
         terminations: Dict[str, bool] = {agent: False for agent in self.agents}
         truncations: Dict[str, bool] = {agent: False for agent in self.agents}
@@ -486,6 +538,8 @@ class MultiShipParallelEnv(ParallelEnv):
             dx_step = float(x_k - self.prev_X_all[k, 0])
             dy_step = float(y_k - self.prev_X_all[k, 1])
             dp = np.array([dx_step, dy_step], dtype=float)
+            step_dist = float(np.hypot(dx_step, dy_step))
+            self.episode_metrics[agent]["path_length_m"] += step_dist
 
             along = float(dp @ t_hat)
             cross = float(dp @ n_hat)
@@ -498,13 +552,14 @@ class MultiShipParallelEnv(ParallelEnv):
             w_cross = -0.2
 
             r_along = w_along * along_norm
-            r_cross = -0.2 * abs(cross_norm)
+            r_cross = w_cross * abs(cross_norm)
 
             # risk penalty: discourage large collision risk with any other vessel
             agent_risks = pair_risk[k].copy()
             agent_risks[k] = 0.0 
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
+            self.episode_metrics[agent]["risk_exposure"] += max_risk * self.dt
 
             w_risk = -2.0
             r_risk = w_risk * max_risk
@@ -514,17 +569,18 @@ class MultiShipParallelEnv(ParallelEnv):
             dcpa_vals = dcpa_vals[np.isfinite(dcpa_vals)]
             min_dcpa = float(np.min(dcpa_vals)) if dcpa_vals.size else dcpa_safe
             dcpa_def = max(0.0, dcpa_safe - min_dcpa)
-            infos[agent]["min_dcpa"] = min_dcpa
-            
+            self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa)
+
             w_dcpa = -1.0
             r_dcpa = w_dcpa * (dcpa_def / dcpa_safe)
 
             # speed penalty for huge speed changes
             u_k = float(self.X_all[k, 5])
-            cruising = 10.0
+            u_des = float(self.u_des_all[k])
 
             w_speed = -0.05
-            r_speed = w_speed * ((u_k - cruising) **2) / (cruising **2)
+            r_speed = w_speed * ((u_k - u_des) **2) / max(u_des **2, 1e-6)
+            infos[agent]["u_des"] = u_des
 
             # time penalty 
             r_time = -0.002
@@ -543,7 +599,8 @@ class MultiShipParallelEnv(ParallelEnv):
             if collision: 
                 terminations[agent] = True
                 infos[agent]["collision"] = True
-                total += w_collision * (1.0 + max_risk + u_k / max(1.0, cruising))
+                self.episode_metrics[agent]["collision"] = 1
+                total += w_collision * (1.0 + max_risk + u_k / max(1.0, u_des))
 
             # sucess: reached final wp and within radius
             dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
@@ -554,13 +611,19 @@ class MultiShipParallelEnv(ParallelEnv):
             if final_reached:
                 terminations[agent] = True
                 infos[agent]["success"] = True
-                total += w_success
+                total += w_success                
+                self.episode_metrics[agent]["success"] = 1
+
+                if self.episode_metrics[agent]["completion_time_s"] is None:
+                    self.episode_metrics[agent]["completion_time_s"] = self.t
 
             rewards[agent] = float(total)
 
         # end episode for all if any termination (centralized training stability)
         if any(terminations.values()):
             self.done = True
+            for agent in self.agents:
+                infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
         
         return rewards, terminations, truncations, infos 
 

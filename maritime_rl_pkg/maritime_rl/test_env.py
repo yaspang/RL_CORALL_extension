@@ -50,7 +50,6 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
             sat_amp_s: float = 20.0, 
             collision_dist_m: float = 60.0,
             goal_tol_nmi: float = 0.02, 
-            horizon_factor: float = 1.5,
             min_steps: int = 300, 
             max_steps_cap: int = 20000,
             seed: Optional[int] = None,
@@ -73,7 +72,6 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         self.collision_dist_m = float(collision_dist_m)
         self.goal_tol_nmi = float(goal_tol_nmi)
 
-        self.horizon_factor = float(horizon_factor)
         self.min_steps = int(min_steps)
         self.max_steps_cap = int(max_steps_cap)
 
@@ -171,7 +169,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         goal_y = self.Ywpt[-1]
         self.prev_goal_dist = np.hypot(goal_x - self.X[0] / 1852, goal_y - self.X[1] / 1852)
 
-        self.set_adaptive_horizon()   # no assignment!
+        self.max_steps = self.set_adaptive_horizon()   # no assignment!
         print(f"[horizon] max_steps={self.max_steps} dist_nmi={self._dist_to_goal_nmi():.2f} u_cmd_mps={self.u_cmd_mps}")
 
         # return initial observation
@@ -243,7 +241,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         self.prev_goal_dist = goal_dist
         
         # progress term
-        r_progress = 200.0 * progress
+        r_progress = 50.0 * progress
 
         # risk penalty 
         # r_risk = -2 * float(np.max(risk)) if risk.size else 0.0
@@ -261,10 +259,10 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         # r_corr = -2 * max(0.0, cte - corridor)**2
 
         # collision term
-        r_collision = -300.0 if collision else 0.0
+        r_collision = -100.0 if collision else 0.0
 
         # completion / goal term 
-        r_goal = 300.0 if reached_goal else 0.0
+        r_goal = 150.0 if reached_goal else 0.0
         # time penalty
         r_time = -0.01
 
@@ -356,20 +354,21 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
 
         return risk, dcpa, tcpa, dist, bearing
     
-    def set_adaptive_horizon(self) -> int:
+    def set_adaptive_horizon(self, max_cap=20000, min_cap = 500, horizon_factor=1.2) -> int:
         """
         Set self.max_steps based on initial distance to goal and commanded speed. 
         Uses nmi for distance (waypoints in plots stored in nmi), m/s for speed, dt for step length, and horizon_factor as a multiplier to ensure the horizon is long enough for the agent to reach the goal. 
         """
 
-        dist_nmi = float(self._dist_to_goal_nmi())
+        dist_nmi = self._dist_to_goal_nmi()
+        u_mps = float(self.u_cmd_mps)
 
-        # convert m/s speed tp nmi per step
-        speed_nmi_per_step = max( 1e-6,(self.u_cmd_mps * self.dt) / 1852.0 )
-        steps_needed = int((dist_nmi / speed_nmi_per_step) * self.horizon_factor)
+        # convert m/s speed to nmi per step
+        speed_nmi_per_step = max( 1e-6,(u_mps * self.dt) / 1852.0 )
+        steps_needed = int(np.ceil((dist_nmi / speed_nmi_per_step) * horizon_factor))
 
         # clip to min and max steps
-        self.max_steps = int(min(max(steps_needed, self.min_steps), self.max_steps_cap))
+        self.max_steps = int(np.clip(steps_needed, min_cap, max_cap))
 
         return self.max_steps
 
