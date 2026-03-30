@@ -42,11 +42,16 @@ def safe_mean(values):
     return float(np.mean(vals)) if len(vals) > 0 else float('nan')
 
 def build_algo_and_env(args):
+    import ray
     from ray import tune
-    from ray.rllib.algorithms.ppo import PPO
+    from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
     
     from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
+
+    # Explicitly initialize Ray with timeout to avoid hangs on Windows
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, _temp_dir=None, include_dashboard=False)
 
     def env_creator(config):
         return MultiShipParallelEnv(
@@ -70,25 +75,33 @@ def build_algo_and_env(args):
     def policy_mapping_fn(agent_id, *args, **kwargs):
         return "shared_policy"
 
-    config = PPO.get_default_config()
-    config["env"] = env_name
-    config["env_config"] = {
-        "case_number": args.case,
-        "dt": args.dt,
-        "sim_time": args.sim_time,
-        "seed": args.seed,
-    }
-
-    config["framework"] = "torch"
-    config["num_workers"] = args.num_workers
-    config["seed"] = args.seed
-    config["multiagent"] = {
-        "policies": {
-            "shared_policy": (None, obs_space, act_space, {})
-        },
-        "policy_mapping_fn": policy_mapping_fn,
-        "policies_to_train": ["shared_policy"],
-    }
+    config = (
+        PPOConfig()
+        .environment(
+            env=env_name,
+            env_config={
+                "case_number": args.case,
+                "dt": args.dt,
+                "sim_time": args.sim_time,
+                "seed": args.seed,
+            },
+        )
+        .framework("torch")
+        .env_runners(
+            num_env_runners=args.num_workers,
+        )
+        .multi_agent(
+            policies={"shared_policy": (None, obs_space, act_space, {})}, 
+            policy_mapping_fn=policy_mapping_fn,
+            policies_to_train=["shared_policy"]
+        )
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False
+        )
+        .debugging(seed=args.seed)
+    )
+    
 
     algo = config.build()
     algo.restore(args.checkpoint)
@@ -110,7 +123,7 @@ def run_one_episode(algo, env_creator, seed):
         actions = {}
 
         for agent_id, agent_obs in obs.items():
-            action = policy.compute_single_action(agent_obs, explore=False)
+            action, _, _ = policy.compute_single_action(agent_obs, explore=False)
             actions[agent_id] = action
         
         obs, rewards, terminations, truncations, infos = env.step(actions)
@@ -121,7 +134,7 @@ def run_one_episode(algo, env_creator, seed):
             reward_by_agent[agent_id] += float(reward)
         
         final_infos = infos
-        done = any(terminations.values()) or any(truncations.values())
+        done = all(terminations.values()) or any(truncations.values())
 
     # extract episode metrics
     metrics_by_agent = {}
@@ -241,20 +254,20 @@ def main():
     csv_path = output_dir / "policy_eval_per_episode.csv"
     fieldnames = [
         "episode_index",
-        "seed",
+        "episode_seed",
         "episode_steps",
         "episode_return_mean",
         "episode_return_ownship",
         "collision_any",
         "success_rate_agents",
-        "path_length_mean_m",
-        "path_length_ownship_m",
-        "min_dcpa_mean_m",
-        "min_dcpa_ownship_m",
+        "path_length_m_mean",
+        "path_length_m_ownship",
+        "min_dcpa_m_mean",
+        "min_dcpa_m_ownship",
         "risk_exposure_mean",
         "risk_exposure_ownship",
-        "completion_time_mean_s",
-        "completion_time_ownship_s"
+        "completion_time_s_mean",
+        "completion_time_s_ownship"
     ]
 
     with open(csv_path, "w", newline="") as csv_file:
@@ -274,6 +287,11 @@ def main():
 
     print(f"\nSaved per-episode CSV to: {csv_path}")
     print(f"Saved summary JSON to: {summary_path}")
+
+    # Clean up Ray resources
+    import ray
+    if ray.is_initialized():
+        ray.shutdown()
 
 
 if __name__ == "__main__":

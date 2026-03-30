@@ -4,22 +4,22 @@ from __future__ import annotations
 from datetime import datetime
 
 import numpy as np
-import matplotlib.pyplot as plt
-
 import cv2
+from pathlib import Path
 
 import matplotlib
 matplotlib.use('Agg')  # Use a non-interactive backend for matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvasAgg
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor, load_results
 from stable_baselines3.common.results_plotter import ts2xy
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback, CallbackList
 
-from .test_env import CORALL_ReactiveAvoidanceGymEnv
+
+from .single_agent_ppo_env import CORALL_ReactiveAvoidanceGymEnv
 
 import os
 import io
@@ -132,7 +132,11 @@ def rollout_policy_make_video_fixed_camera(
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
     try:
-        t = 0 # initialize t before loop
+        t = 0  # initialize t before loop
+        terminated = False
+        truncated = False
+        info = {}
+        
         for t in range(max_steps):
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, reward, terminated, truncated, info = env.step(action)
@@ -206,13 +210,14 @@ def rollout_policy_make_video_fixed_camera(
 
                 # Capture rendered frame to array
                 buf = io.BytesIO()
-                fig.savefig(buf, format='rgb', dpi=100)
+                fig.savefig(buf, format='png', dpi=dpi)
                 buf.seek(0)
                 
-                raw_data = np.frombuffer(buf.getvalue(), dtype=np.uint8)
-                w, h = fig.canvas.get_width_height()
-                frame_rgb = raw_data.reshape(h, w, 3)
-                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                # Read PNG buffer and decode
+                png_data = np.frombuffer(buf.getvalue(), dtype=np.uint8)
+                frame_bgr = cv2.imdecode(png_data, cv2.IMREAD_COLOR)
+                if frame_bgr is None:
+                    raise RuntimeError("Failed to decode PNG frame buffer")
 
 
                 # capture rendered frame
@@ -223,8 +228,8 @@ def rollout_policy_make_video_fixed_camera(
                 if writer is None:
                     H, W = frame_bgr.shape[:2]
 
-                    for courcc in fourcc_list:
-                        writer = cv2.VideoWriter(video_path, courcc, fps_out, (W, H))
+                    for fourcc in fourcc_list:
+                        writer = cv2.VideoWriter(video_path, fourcc, fps_out, (W, H))
                         if writer.isOpened():
                             break
                         writer.release()
@@ -248,6 +253,120 @@ def rollout_policy_make_video_fixed_camera(
 
     return ep_ret, (t + 1), info
 
+class RewardLoggingCallback(BaseCallback):
+    """
+    Logs training episodic returns from Monitor during learning. 
+
+    Saves: 
+        - raw episodic returns
+        - timestep at episode end
+        - rolling mean episodic return
+    """
+
+    def __init__(self, rolling_window: int = 20, verbose: int = 0):
+        super().__init__(verbose)
+        self.rolling_window = rolling_window
+        self.episode_returns = []
+        self.episode_lengths = []
+        self.episode_end_steps = []
+        self.rolling_mean_returns = []
+    
+    def on_step(self) -> bool:
+        # in SB3, Monitor injects "episode" into info when an episode ends 
+        # check if episode ended and log return
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            ep = info.get("episode")
+            
+            if ep is not None:
+                ep_ret = float(ep["r"])
+                ep_len = int(ep["l"])
+                
+                self.episode_returns.append(ep_ret)
+                self.episode_lengths.append(ep_len)
+                self.episode_end_steps.append(self.num_timesteps)
+
+                start = max(0, len(self.episode_returns) - self.rolling_window)
+                rolling_mean = float(np.mean(self.episode_returns[start:]))
+                self.rolling_mean_returns.append(rolling_mean)
+
+                # log to terminal / tensorboard
+                self.logger.record("custom/episode_return", ep_ret)
+                self.logger.record("custom/episode_length", ep_len)
+                self.logger.record("custom/rolling_mean_return", rolling_mean)
+
+                if self.verbose > 0: 
+                    print(
+                        f"  [train] step={self.num_timesteps} "
+                        f"ep_ret={ep_ret:.2f} ep_len={ep_len} "
+                        f"mean_return={rolling_mean:.2f}"
+                    )
+                    )
+                    
+        return True
+
+def moving_average(x, window: int):
+    if len(x) == 0:
+        return np.array([])
+    window = max(1, int(window))
+    if len(x) < window:
+        return np.array([np.mean(x)] * len(x))
+    kernel = np.ones(window) / window
+    return np.convolve(x, kernel, mode="valid")
+
+
+def save_training_plots(log_dir: str, reward_callback: RewardLoggingCallback):
+    log_dir = Path(log_dir)
+
+    # --- Plot 1: raw episodic return + rolling mean from callback
+    x = np.array(reward_callback.episode_end_steps, dtype=float)
+    y = np.array(reward_callback.episode_returns, dtype=float)
+    y_roll = np.array(reward_callback.rolling_mean_returns, dtype=float)
+
+    if len(x) > 0:
+        plt.figure(figsize=(10, 5))
+        plt.plot(x, y, alpha=0.35, label="episode return")
+        plt.plot(x, y_roll, linewidth=2, label=f"rolling mean ({reward_callback.rolling_window})")
+        plt.xlabel("training timesteps")
+        plt.ylabel("episodic return")
+        plt.title("Training episodic return")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(log_dir / "training_episode_return.png", dpi=150)
+        plt.close()
+
+    # --- Plot 2: Monitor-based reward history
+    try:
+        results = load_results(str(log_dir))
+        x_m, y_m = ts2xy(results, "timesteps")
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(x_m, y_m, alpha=0.35, label="episode return (Monitor)")
+        if len(y_m) >= 10:
+            y_m_smooth = moving_average(y_m, window=10)
+            x_m_smooth = x_m[len(x_m) - len(y_m_smooth):]
+            plt.plot(x_m_smooth, y_m_smooth, linewidth=2, label="moving avg (10)")
+        plt.xlabel("training timesteps")
+        plt.ylabel("episodic return")
+        plt.title("Monitor reward history")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(log_dir / "monitor_episode_return.png", dpi=150)
+        plt.close()
+    except Exception as e:
+        print(f"[warn] could not load monitor results for plotting: {e}")
+
+    # --- Save numeric arrays too
+    np.savez(
+        log_dir / "training_reward_data.npz",
+        episode_end_steps=np.array(reward_callback.episode_end_steps),
+        episode_returns=np.array(reward_callback.episode_returns),
+        episode_lengths=np.array(reward_callback.episode_lengths),
+        rolling_mean_returns=np.array(reward_callback.rolling_mean_returns),
+    )
+
 def main():
 
     # --- 1) determinstic "does action matter?" test
@@ -256,19 +375,43 @@ def main():
     ret, steps, term, trunc, info = rollout_fixed_action(env, fixed_action=0, max_steps=5000)
         
     print(
-            f"[Case 1] return={ret:.2f}, steps={steps}, trunc={trunc}, "
+            f"[Case 2] return={ret:.2f}, steps={steps}, trunc={trunc}, "
             f"risk_max={info.get('risk_max', float('nan')):.3f}, "
             f"collision={info.get('collision')}, goal={info.get('reached_goal')}"
     )
 
 
-    # --- 2) PPO training (tiny sanity run)
+    # --- 2) PPO training with logging + periodic evaluation
     # use DummyVecEnv for single-process vectorized environment
+
+    run_name = datetime.now().strftime("ppo_corall_baby_case2_%Y%m%d_%H%M%S")
+    log_dir = Path("runs") / run_name
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     def make_env():
-        env = CORALL_ReactiveAvoidanceGymEnv(case_number=2, dt=0.2, K_obstacles=1, max_steps_cap=20000)
-        return Monitor(env, filename='monitor.csv')
+        env = CORALL_ReactiveAvoidanceGymEnv(
+                    case_number=2, 
+                    dt=0.2, 
+                    K_obstacles=1, 
+                    max_steps_cap=20000
+        )
+        return Monitor(env, filename=str(log_dir / "monitor.csv"))
     
     vec_env = DummyVecEnv([make_env])
+
+    # separate eval environment
+    eval_env = DummyVecEnv([
+        lambda: Monitor(
+            CORALL_ReactiveAvoidanceGymEnv(
+                case_number=2, 
+                dt=0.2,
+                K_obstacles=1,
+                max_steps_cap=20000
+
+            ), 
+            filename=str(log_dir / "eval_monitor.csv")
+        )
+    ])
 
     model = PPO(
         policy="MlpPolicy",
@@ -283,40 +426,63 @@ def main():
         device='auto'
     )
 
-    # train for a small number of timesteps to see learning steps
-    model.learn(total_timesteps=1_000_000)
+    reward_callback = RewardLoggingCallback(rolling_window=20, verbose=1)
 
-    # load monitor results and print reward history
-    results = load_results('.')
-    x, y = ts2xy(results, 'timesteps')
+    eval_callback = EvalCallback(
+        eval_env, 
+        best_model_save_path=str(log_dir / "best_model"),
+        log_path=str(log_dir / "eval_logs"),
+        eval_freq = 10_000, # adjust as desired
+        n_eval_episodes=5,
+        deterministic=True,
+        render=False, 
+        verbose=1
+    )
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(x, y)
-    plt.xlabel('Timesteps')
-    plt.ylabel('Episode Reward')
-    plt.title('PPO Training Reward History over Training  Time Steps')
-    plt.grid()
-    plt.savefig("ppo_training_reward_history.png", dpi=150)
-    plt.close()
+    callback = CallbackList([reward_callback, eval_callback])
 
-    print("saved reward curve to ppo_training_reward_history.png")
+    # train over timesteps
+    model.learn(total_timesteps=1_000_000, callback=callback, progress_bar=True)
+
+    # save plots + numeric reward arrays
+    save_training_plots(log_dir, reward_callback)
+
  
     # --- 3) evaluate trained policy
-    eval_env = CORALL_ReactiveAvoidanceGymEnv(case_number=2, dt=0.2, K_obstacles=len(env.Xob), max_steps_cap=20000)
-    mean_reward, std_reward = evaluate_policy(model, eval_env, n_eval_episodes=10, deterministic=True)
+    final_eval_env = CORALL_ReactiveAvoidanceGymEnv(
+                    case_number=2, 
+                    dt=0.2, 
+                    K_obstacles=1,  # Use fixed value (matches training environment)
+                    max_steps_cap=20000
+            )
+    
+    mean_reward, std_reward = evaluate_policy(
+                    model, 
+                    final_eval_env, 
+                    n_eval_episodes=10, 
+                    deterministic=True
+                )
     print(f"\n[PPO eval] mean_return={mean_reward:.2f} +/- {std_reward:.2f} over 10 episodes")
 
     # 4) rollout / visualize trained policy
 
     # Run a rollout that records video/frames using the trained policy
-    fps = int(round(1.0 / env.dt))
-    ret, steps, info = rollout_policy_make_video_fixed_camera(model, eval_env, video_path=None, max_steps=None, deterministic=True, record_every=5, dpi=150, figsize=(7, 7))
+    # fps = int(round(1.0 / final_eval_env.dt))
+    ret, steps, info = rollout_policy_make_video_fixed_camera(
+                    model, 
+                    final_eval_env, 
+                    video_path=None, 
+                    max_steps=None, 
+                    deterministic=True,
+                    record_every=5, 
+                    dpi=150, 
+                    figsize=(7, 7))
 
     print(f"[PPO rollout] return={ret:.2f}, steps={steps}, done={info.get('collision') or info.get('reached_goal')}")
             
     # save model 
-    model.save("ppo_corall_baby_case2")
-    print("Saved model to ppo_corall_baby_case2.zip")
+    model.save(str(log_dir / "ppo_corall_baby_case2.zip"))
+    print(f"Saved model and logs under: {log_dir}")
 
 if __name__ == "__main__":
     main()

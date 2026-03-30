@@ -277,7 +277,9 @@ class MultiShipParallelEnv(ParallelEnv):
         self.Xwpt_all, self.Ywpt_all = self.build_waypoints(self.X_all)
 
         # make each ship immediately aim for downstream route instead of initial location 
-        self.i_wpt_all = np.array([1 if len(self.Xwpt_all[k]) > 1 else 0 for k in range(self.n_agents)], dtype=int)
+        self.i_wpt_all = np.array(
+            [1 if len(self.Xwpt_all[k]) > 1 else 0 for k in range(self.n_agents)], dtype=int
+        )
 
     
     def reset(self, seed=None, options=None):
@@ -354,10 +356,7 @@ class MultiShipParallelEnv(ParallelEnv):
             x_nmi, y_nmi = x_m / NMI, y_m / NMI
 
             i_wpt_k = waypoint_selection(Xwpt_k, Ywpt_k, x_nmi, y_nmi, i_wpt_k)
-            self.i_wpt_all[k] = np.array(
-                [1 if len(self.Xwpt_all[k]) > 1 else 0 for k in range(self.n_agents)], 
-                dtype=int
-            )
+            self.i_wpt_all[k] = i_wpt_k
 
             psi_wp = planning(Xwpt_k, Ywpt_k, x_nmi, y_nmi, i_wpt_k)
             psi_ref[k] = float(psi_wp + delta_heading)
@@ -571,22 +570,23 @@ class MultiShipParallelEnv(ParallelEnv):
             dcpa_def = max(0.0, dcpa_safe - min_dcpa)
             self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa)
 
-            w_dcpa = -1.0
-            r_dcpa = w_dcpa * (dcpa_def / dcpa_safe)
+            # w_dcpa = -1.0
+            # r_dcpa = w_dcpa * (dcpa_def / dcpa_safe)
 
             # speed penalty for huge speed changes
             u_k = float(self.X_all[k, 5])
             u_des = float(self.u_des_all[k])
 
-            w_speed = -0.05
-            r_speed = w_speed * ((u_k - u_des) **2) / max(u_des **2, 1e-6)
+            # w_speed = -0.05
+            # r_speed = w_speed * ((u_k - u_des) **2) / max(u_des **2, 1e-6)
             infos[agent]["u_des"] = u_des
 
             # time penalty 
-            r_time = -0.002
+            # r_time = -0.002
             infos[agent]["t"] = self.t
 
-            total = r_along + r_cross + r_risk + r_dcpa + r_speed + r_time
+            #total = r_along + r_cross + r_risk + r_dcpa + r_speed + r_time
+            total = r_along + r_cross + r_risk
 
             # collision penalty
             finite_d = np.isfinite(pair_dist[k])
@@ -596,11 +596,16 @@ class MultiShipParallelEnv(ParallelEnv):
 
             w_collision = -10.0
 
+            # only apply the collision penalty at the moment of collision, not every step after
+            # scale by risk and speed to encourage risk mitigation and slowing down in high-risk situations (instead of just a flat penalty every step within collision distance)
             if collision: 
-                terminations[agent] = True
-                infos[agent]["collision"] = True
+                if self.episode_metrics[agent]["collision"] == 0:
+                    total += w_collision * (1.0 + max_risk + u_k / max(1.0, u_des))
+                else: 
+                    total = total 
                 self.episode_metrics[agent]["collision"] = 1
-                total += w_collision * (1.0 + max_risk + u_k / max(1.0, u_des))
+                # terminations[agent] = True
+                # infos[agent]["collision"] = True
 
             # sucess: reached final wp and within radius
             dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
@@ -619,8 +624,8 @@ class MultiShipParallelEnv(ParallelEnv):
 
             rewards[agent] = float(total)
 
-        # end episode for all if any termination (centralized training stability)
-        if any(terminations.values()):
+        # only end episode globally if all agents are terminated, otherwise allow remaining agents to continue (e.g. if one ship reaches goal or collides, but others can still navigate)
+        if all(terminations.values()):
             self.done = True
             for agent in self.agents:
                 infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])

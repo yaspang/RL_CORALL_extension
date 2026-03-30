@@ -273,7 +273,7 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
         # r_bias = -0.05 * abs(self.psi_colav)
 
 
-        reward = float(r_progress + r_cte + r_collision + r_goal + r_time)
+        reward = float(r_progress + r_cte + r_collision)
 
         obs = self._get_obs()
 
@@ -306,6 +306,12 @@ class CORALL_ReactiveAvoidanceGymEnv(gym.Env):
             raise ValueError("Non-finite obs detected")
         if not np.isfinite(reward):
             raise ValueError("Non-finite reward detected")
+        
+        if terminated or truncated:
+            info["episode_collision"] = int(collision)
+            info["episode_goal_reached"] = int(reached_goal)
+            info["episode_min_dist_m"] = float(dmin)
+            info["episode_final_goal_dist_nmi"] = float(goal_dist)
 
         return obs, reward, terminated, truncated, info
     

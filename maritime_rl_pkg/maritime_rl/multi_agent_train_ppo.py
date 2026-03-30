@@ -14,8 +14,12 @@ import argparse
 import time
 from pathlib import Path
 import csv
+
+import matplotlib
+matplotlib.use("Agg")  # Use non-interactive backend for plotting in headless environments
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 def parse_args():
     """Make it easier to make case numbers and training outputs clear after trained
@@ -40,79 +44,51 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--eval_every", type=int, default=10)
+    p.add_argument("--n_eval_episodes", type=int, default=3, help="Number of evaluation episodes to run at each evaluation checkpoint")
+    p.add_argument("--ckpt_every", type=int, default=25, help="How often (in training iterations) to save checkpoints")
     return p.parse_args()
 
-def run_policy_evaluation(algo, env_config, n_eval_episodes=5):
+def run_policy_evaluation(algo, env_creator, n_eval_episodes=5):
     """
     Run deterministic evaluation rollouts with current PPO policy during training
     Returns average episode-level metrics 
     """
     eval_returns = []
     eval_lengths = []
-    eval_collision_flags = []
-    eval_success_rates = []
-    eval_path_lengths = []
-    eval_min_dcpas = []
-    eval_risk_exposures = []
-    eval_completion_times = []
-
-    policy = algo.get_policy("shared_policy")
 
     for ep in range(n_eval_episodes):
-        env = env_config({})
+        env = env_creator({})
         obs, infos = env.reset()
-
-        done = {agent: False for agent in env.agents}
-        truncated = {agent: False for agent in env.agents}
 
         ep_return_by_agent = {agent: 0.0 for agent in env.agents}
         ep_len = 0
-        final_infos = None
 
         while True: 
             actions = {}
 
             for agent_id, agent_obs in obs.items():
-                action, _, _ = policy.compute_single_action(agent_obs, explore=False) # deterministic evaluation
+                action = algo.compute_single_action(
+                    agent_obs, 
+                    policy_id="shared_policy",
+                    explore=False,
+                )
                 actions[agent_id] = action
 
-            obs, rewards, terminations, truncated, infos = env.step(actions)
+            obs, rewards, terminations, truncations, infos = env.step(actions)
 
             ep_len += 1
             for agent_id, reward in rewards.items():
                 ep_return_by_agent[agent_id] += float(reward)
-            
-            final_infos = infos
 
-            any_done = any(terminations.values())
-            any_trunc = any(truncated.values())
-            if any_done or any_trunc:
+            # In multi-agent maritime scenarios, continue until ALL agents are done 
+            # to preserve complete trajectories for each agent's learning
+            if all(terminations.values()) or all(truncations.values()):
                 break
 
         # mean return over agents for this eval episode
         eval_returns.append(float(np.mean(list(ep_return_by_agent.values()))))
         eval_lengths.append(ep_len)
-
-        # read episode metrics from final infos 
-        metrics_by_agent = []
-        if final_infos is not None:
-            for agent_id, info in final_infos.items():
-                epm = info.get("episode_metrics", None)
-                if isinstance(epm, dict):
-                    metrics_by_agent.append(epm)
-        
-        if metrics_by_agent:
-            eval_collision_flags.append(float(any(int(epm.get("collision", 0)) for epm in metrics_by_agent)))
-            eval_success_rates.append(float(np.mean([int(epm.get("success", 0)) for epm in metrics_by_agent])))
-            eval_path_lengths.append(float(np.nanmean([epm.get("path_length_m", np.nan) for epm in metrics_by_agent])))
-            eval_min_dcpas.append(float(np.nanmean([epm.get("min_dcpa_m", np.nan) for epm in metrics_by_agent])))
-            eval_risk_exposures.append(float(np.nanmean([epm.get("risk_exposure", np.nan) for epm in metrics_by_agent])))
-
-            cts = [epm.get("completion_time_s", np.nan) for epm in metrics_by_agent]
-            cts = [x for x in cts if x is not None and not np.isnan(x)]
-
-            if len(cts) > 0: 
-                eval_completion_times.append(float(np.mean(cts)))
         
         if hasattr(env, "close"):
             env.close()
@@ -120,33 +96,44 @@ def run_policy_evaluation(algo, env_config, n_eval_episodes=5):
     return {
         "eval_return_mean": float(np.mean(eval_returns)) if eval_returns else float("nan"),
         "eval_ep_length_mean": float(np.mean(eval_lengths)) if eval_lengths else float("nan"),
-        "eval_collision_rate_mean": float(np.mean(eval_collision_flags)) if eval_collision_flags else float("nan"),
-        "eval_success_rate_mean": float(np.mean(eval_success_rates)) if eval_success_rates else float("nan"),
-        "eval_path_length_m_mean": float(np.mean(eval_path_lengths)) if eval_path_lengths else float("nan"),
-        "eval_min_dcpa_m_mean": float(np.mean(eval_min_dcpas)) if eval_min_dcpas else float("nan"),
-        "eval_risk_exposure_mean": float(np.mean(eval_risk_exposures)) if eval_risk_exposures else float("nan"),
-        "eval_completion_time_s_mean": float(np.mean(eval_completion_times)) if eval_completion_times else float("nan"),
     }
 
+def moving_average(values, window=10):
+    vals = np.asarray(values, dtype=float)
+    if len(vals) == 0: 
+        return vals
+    out = np.full_like(vals, np.nan, dtype=float)
+    for i in range(len(vals)):
+        lo = max(0, i-window+1)
+        chunk = vals[lo:i + 1]
+        chunk = chunk[np.isfinite(chunk)]
+        if len(chunk) > 0:
+            out[i] = np.mean(chunk)
+    return out 
 
 def main():
     args = parse_args()
+    print(f"[DEBUG] Parsed args: {args}")
 
     # Create an output folder for this run
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    output_dir = Path(f"MARL_ppo_case{args.case}_{timestamp}") / f"seed_{args.seed}" / timestamp
+    output_dir = Path(f"MARL_ppo_case{args.case}_{timestamp}") / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[logging] writing outputs to: {output_dir.resolve()}")
 
     # local imports so file can be imported without Ray installed
+    import ray
     from ray import tune
     from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.algorithms.ppo import PPO
 
     from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
-    
+
+    # Explicitly initialize Ray with timeout to avoid hangs on Windows
+    if not ray.is_initialized():
+        ray.init(ignore_reinit_error=True, _temp_dir=None, include_dashboard=False)
 
     def env_creator(config):
         case_number = config.get("case_number", args.case)
@@ -177,169 +164,136 @@ def main():
         return "shared_policy"
     
     # Build PPO algorithm configuration using RLlib's config API based on docs available
-    print("Creating PPOConfig...")    
-    config = PPO.get_default_config()
+    config = (
+        PPOConfig()
+        .environment(
+            env="corall_mappo_env",
+            env_config={
+                "case_number": args.case,
+                "seed": args.seed,
+            }, 
+        )
+        .framework("torch")
+        .env_runners(
+            num_env_runners=args.num_workers,
+            rollout_fragment_length=args.rollout_frag,
+            batch_mode="complete_episodes"
+        )
+        .training(
+            lr=args.lr,
+            gamma=args.gamma,
+            train_batch_size=args.train_batch,
+            clip_param=0.2, 
+            vf_clip_param=10.0,
+            entropy_coeff=0.0,
+            lambda_=0.95, 
+            num_epochs=10,
+            minibatch_size=128,
+        )
+        .multi_agent(
+            policies={"shared_policy": (None, obs_space, act_space, {})}, 
+            policy_mapping_fn=policy_mapping_fn,
+            policies_to_train=["shared_policy"]
+        )
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False
+        )
+    )
 
-    # set environment
-    config["env"] = "corall_mappo_env"
-    config["env_config"] = {"case_number": args.case, "seed": args.seed}
+    # instantiate PPO algorithm with config
+    algo = PPO(config=config)
 
-    # set framework
-    config["framework"] = "torch"
+    # Create subdirectory for checkpoints
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # set rollout workers
-    config["num_rollout_workers"] = args.num_workers
-    config["rollout_fragment_length"] = args.rollout_frag
-
-    # set training parameters
-    config["lr"] = args.lr
-    config["gamma"] = args.gamma
-    config["train_batch_size"] = args.train_batch
-    # optional PPO hyperparameters (tune as needed)
-    config["clip_param"] = 0.2
-    config["vf_clip_param"] = 10.0
-    config["entropy_coeff"] = 0.0
-    config["lambda"] = 0.95
-    config["num_sgd_iter"] = 10
-    config["sgd_minibatch_size"] = 2048 
-
-    # multi-agent setup
-    config["multiagent"] = {
-        "policies": {"shared_policy": (None, obs_space, act_space, {})},
-        "policy_mapping_fn": policy_mapping_fn,
-        "policies_to_train": ["shared_policy"],
-    }
-
-    # seed
-    config["seed"] = args.seed
-
-    # log checkpoints to output folder
-    config["logger_config"] = {
-    "type": "ray.tune.logger.UnifiedLogger",
-    "logdir": str(output_dir),
-    }
-
-    print(f"Config: {config}")
-
-    algo = config.build()
-
-    
-    plt.ion()
-
-    # Plot live rewards during training 
-    fig_train, ax_train = plt.subplots()
-    ax_train.set_title(f"PPO training reward | case {args.case} | seed {args.seed}")
-    ax_train.set_xlabel("Training Iteration")
-    ax_train.set_ylabel("Episode Reward Mean")
-    xs_train, ys_train = [], []
-    (line_train,) = ax_train.plot(xs_train, ys_train, label="reward")
-
-    # Plot live evaluation of returns during training
-    fig_eval, ax_eval = plt.subplots()
-    ax_eval.set_title(f"PPO evaluation return | case {args.case} | seed {args.seed}")
-    ax_eval.set_xlabel("Training Iteration")
-    ax_eval.set_ylabel("Evaluation Mean Episode Return")
-    xs_eval, ys_eval = [], []
-    (line_eval,) = ax_eval.plot(xs_eval, ys_eval, label="eval_return")
-
-
-    # CSV logging setup 
     csv_path = output_dir / "training_metrics.csv"
     with open(csv_path, mode="w", newline="") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow([
             "iteration", 
-            "episode_reward_mean", 
-            "episode_len_mean", 
-            "custom_metrics/path_length_m_mean",
-            "custom_metrics/min_dcpa_m_mean",
-            "custom_metrics/risk_exposure_mean",
-            "custom_metrics/collision_rate_episode_mean",
-            "custom_metrics/success_rate_mean",
-            "custom_metrics/collision_rate_mean",
-            "custom_metrics/completion_time_s_mean",
-            "eval_return_mean", 
-            "eval_collision_rate_mean",
-            "eval_success_rate_mean",
-            "eval_path_length_m_mean",
-            "eval_min_dcpa_m_mean",
-            "eval_risk_exposure_mean", 
-            "eval_completion_time_s_mean",
+            "episode_return_mean", 
+            "episode_len_mean",
+            "eval_return_mean",
+            "eval_ep_length_mean"
         ])
-
-
-    # training loop (
-    ## collect rollouts and print desired metrics at each checkpoint)
-    plot_every = 1
-    save_png_every = 10
-    ckpt_every = 25
-    eval_every = 5
-    n_eval_episodes = 5
+    
+    xs_train, ys_train = [], []
+    xs_eval, ys_eval = [], []
 
     for i in range(args.iters):
         result = algo.train()
 
-        custom = result.get("custom_metrics", {})
+        runner_stats = result.get("env_runners", {})
+        rew = runner_stats.get("episode_return_mean", float("nan"))
+        ep_len = runner_stats.get("episode_len_mean", float("nan"))
 
-        # Data for mean episodic return over training (validation signal)
+        xs_train.append(i+1)
+        ys_train.append(rew)
+
+        # Run evaluation periodically
         eval_return_mean = float("nan")
+        eval_ep_length_mean = float("nan")
+        
+        if (i+1) % args.eval_every == 0:
+            try:
+                eval_results = run_policy_evaluation(
+                    algo, 
+                    env_creator, 
+                    n_eval_episodes=args.n_eval_episodes
+                )
+                eval_return_mean = eval_results["eval_return_mean"]
+                eval_ep_length_mean = eval_results["eval_ep_length_mean"]
+                xs_eval.append(i+1)
+                ys_eval.append(eval_return_mean)
+            except Exception as e:
+                print(f"[WARNING] Evaluation failed at iteration {i+1}: {e}")
 
-        # Data for rewards over training
-        rew = result.get("episode_reward_mean", float("nan"))
-        ep_len = result.get("episode_len_mean", float("nan"))
+        print(
+            f"Iter {i+1}/{args.iters} | "
+            f"train_return={rew:.2f} | "
+            f"ep_len={ep_len:.2f} | "
+            f"eval_return={eval_return_mean:.2f}"
+        )
 
-        if (i+1) % eval_every == 0:
-            eval_results = run_policy_evaluation(algo, env_creator, n_eval_episodes=n_eval_episodes)
-            eval_return_mean = eval_results["eval_return_mean"]            
-            xs_eval.append(i)
-            ys_eval.append(eval_return_mean)
-
-        # print progress
-        if i % plot_every == 0:
-            # training reward plot 
-            xs_train.append(i)
-            ys_train.append(rew)
-            line_train.set_data(xs_train, ys_train)
-            ax_train.relim()
-            ax_train.autoscale_view()
-            fig_train.canvas.draw()
-            fig_train.canvas.flush_events()
-
-            # evaluation return plot
-            line_eval.set_data(xs_eval, ys_eval)
-            ax_eval.relim()
-            ax_eval.autoscale_view()
-            fig_eval.canvas.draw()
-            fig_eval.canvas.flush_events()
-
-
-        # write csv row 
         with open(csv_path, mode="a", newline="") as csv_file:
             csv.writer(csv_file).writerow([
-                i, 
+                i+1, 
                 rew, 
                 ep_len,
-                eval_return_mean
+                eval_return_mean,
+                eval_ep_length_mean
             ])
-
-        # checkpointing
-        if (i+1) % ckpt_every == 0:
-            ckpt = algo.save()
-            print(f"Checkpoint saved at iteration {i+1}: {ckpt}")
         
-        # save plot snapshot
-        if (i+1) % save_png_every == 0:
-            fig_train.savefig(output_dir / f"training_plot_iter{i+1}.png", dpi=150)
-            fig_eval.savefig(output_dir / f"evaluation_plot_iter{i+1}.png", dpi=150)
-        
-        # save checkpoint
-        fig_train.savefig(output_dir / f"reward_plot_iter{i+1}.png", dpi=200)
-        fig_eval.savefig(output_dir / f"eval_return_plot_iter{i+1}.png", dpi=200)
+        if (i+1) % args.ckpt_every == 0:
+            ckpt_path = algo.save(str(checkpoint_dir))
+            print(f"Checkpoint saved at iteration {i+1}: {ckpt_path}")
+    
+    final_ckpt_path = algo.save(str(checkpoint_dir))
+    print(f"Training complete. Final checkpoint saved at: {final_ckpt_path}")
 
-    # final save
-    fig_train.savefig(output_dir / f"final_reward_plot.png", dpi=200)
-    ckpt = algo.save()
-    print("Saved finalcheckpoint:", ckpt)
+    # Final training plot
+    fig1, ax1 = plt.subplots(figsize=(10, 5))
+    ax1.plot(xs_train, ys_train, label="train_return", color="blue", alpha=0.5)
+    ax1.plot(xs_train, moving_average(ys_train, window=10), label="train_return (moving avg)", color="darkblue", linestyle="--")
+    
+    if len(xs_eval) > 0:
+        ax1.plot(xs_eval, ys_eval, marker="o", label="eval_return", color="orange", linestyle="-", markersize=6)
+    
+    ax1.set_title(f"PPO training vs evaluation return | case {args.case} | seed {args.seed}")
+    ax1.set_xlabel("Training Iteration")
+    ax1.set_ylabel("Mean Episode Return")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    fig1.tight_layout()
+    fig1.savefig(output_dir / "training_return.png", dpi=200)
+    plt.close(fig1)
+
+    # Clean up Ray resources
+    import ray
+    if ray.is_initialized():
+        ray.shutdown()
 
 if __name__ == "__main__":
     main()
