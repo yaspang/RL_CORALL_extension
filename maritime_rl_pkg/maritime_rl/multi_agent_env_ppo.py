@@ -86,8 +86,8 @@ class MultiShipParallelEnv(ParallelEnv):
             
         self, 
         case_number: int, 
-        dt: float = 0.2, 
-        sim_time: float = 300.0, 
+        dt: float = 0.5, 
+        sim_time: float = 10_000.0, 
         render_mode: Optional[str] = None, 
         # action discretization
         n_heading: int = 7, 
@@ -298,7 +298,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 "risk_exposure": 0.0,
                 "collision": 0,
                 "success": 0,
-                "completion_time_s": None,
+                "completion_time_s": np.nan,
             } for agent in self.agents
         }
 
@@ -324,6 +324,11 @@ class MultiShipParallelEnv(ParallelEnv):
         u_cmd = np.zeros(self.n_agents, dtype=float)
 
         for k, agent in enumerate(self.agents):
+            # skip agents that have already terminated (not in actions dict)
+            ## allow env to handle agents dropping out during long episodes
+            if agent not in actions:
+                continue
+                
             a = np.asarray(actions[agent], dtype=float)
             if a.size != 2:
                 raise ValueError(f"Action for {agent} must be shape (2,), got {a.shape}")
@@ -388,6 +393,14 @@ class MultiShipParallelEnv(ParallelEnv):
             for agent in self.agents:
                 truncations[agent] = True
             self.done = True
+
+        # if episode ends for any reason, attach final episode metrics to infos for logging and evaluation 
+        ## for full success termination + timeout truncation
+
+        if self.done or any(truncations.values()) or all(terminations.values()):
+            for agent in self.agents:
+                infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
+
         
         observations = {agent: self._get_observation(k) for k, agent in enumerate(self.agents)}
 
@@ -563,14 +576,19 @@ class MultiShipParallelEnv(ParallelEnv):
             w_risk = -2.0
             r_risk = w_risk * max_risk
 
-            # DCPA penalty: normalized on scale of smallest safe DCPA
+            # DCPA penalty: normalized on scale of smallest safe DCPA (absoluate DCPA magnitude)
             dcpa_vals = pair_dcpa[k]
             dcpa_vals = dcpa_vals[np.isfinite(dcpa_vals)]
-            min_dcpa = float(np.min(dcpa_vals)) if dcpa_vals.size else dcpa_safe
-            dcpa_def = max(0.0, dcpa_safe - min_dcpa)
-            self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa)
 
-            # w_dcpa = -1.0
+            if dcpa_vals.size: 
+                min_dcpa_abs = float(np.min(np.abs(dcpa_vals)))
+            else: 
+                min_dcpa_abs = dcpa_safe
+
+            dcpa_def = max(0.0, dcpa_safe - min_dcpa_abs)
+            self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa_abs)
+
+            # optional additional shaping or in place of risk penalty, but risk is more comprehensive 
             # r_dcpa = w_dcpa * (dcpa_def / dcpa_safe)
 
             # speed penalty for huge speed changes
@@ -591,7 +609,7 @@ class MultiShipParallelEnv(ParallelEnv):
             # collision penalty
             finite_d = np.isfinite(pair_dist[k])
             min_dist = float(np.min(pair_dist[k][finite_d])) if np.any(finite_d) else np.inf
-            collision = (min_dist < LOA) or (min_dcpa < LOA)
+            collision = (min_dist < LOA) 
             infos[agent]["min_dist"] = min_dist
 
             w_collision = -10.0
@@ -619,16 +637,16 @@ class MultiShipParallelEnv(ParallelEnv):
                 total += w_success                
                 self.episode_metrics[agent]["success"] = 1
 
-                if self.episode_metrics[agent]["completion_time_s"] is None:
+                if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
                     self.episode_metrics[agent]["completion_time_s"] = self.t
 
             rewards[agent] = float(total)
 
-        # only end episode globally if all agents are terminated, otherwise allow remaining agents to continue (e.g. if one ship reaches goal or collides, but others can still navigate)
+        # only end episode globally if all agents are terminated
+        ## otherwise allow remaining agents to continue (e.g. if one ship reaches goal or collides, but others can still navigate)
         if all(terminations.values()):
             self.done = True
-            for agent in self.agents:
-                infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
+        
         
         return rewards, terminations, truncations, infos 
 

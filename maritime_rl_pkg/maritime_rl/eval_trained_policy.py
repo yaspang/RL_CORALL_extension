@@ -32,6 +32,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=0, help="Base random seed for evaluation")
     p.add_argument("--dt", type=float, default=0.2, help="Time step duration in seconds for the environment")
     p.add_argument("--sim_time", type=float, default=300.0, help="Total simulation time in seconds for each episode")
+    p.add_argument("--route_len_nmi", type=float, default=40.0, help="Route length in nautical miles (scaling factor for environment)")
     p.add_argument("--num_workers", type=int, default=0, help="Number of parallel workers to use for evaluation (default: 0 for standalone eval)")
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
 
@@ -42,22 +43,18 @@ def safe_mean(values):
     return float(np.mean(vals)) if len(vals) > 0 else float('nan')
 
 def build_algo_and_env(args):
-    import ray
     from ray import tune
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
     
     from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
 
-    # Explicitly initialize Ray with timeout to avoid hangs on Windows
-    if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True, _temp_dir=None, include_dashboard=False)
-
     def env_creator(config):
         return MultiShipParallelEnv(
             case_number=config.get("case_number", args.case),
             dt=config.get("dt", args.dt),
             sim_time=config.get("sim_time", args.sim_time),
+            route_len_nmi=config.get("route_len_nmi", args.route_len_nmi),
             render_mode="human" if args.render else "none",
             seed=config.get("seed", args.seed),
         )
@@ -83,6 +80,7 @@ def build_algo_and_env(args):
                 "case_number": args.case,
                 "dt": args.dt,
                 "sim_time": args.sim_time,
+                "route_len_nmi": args.route_len_nmi,
                 "seed": args.seed,
             },
         )
@@ -103,7 +101,7 @@ def build_algo_and_env(args):
     )
     
 
-    algo = config.build()
+    algo = config.build_algo()
     algo.restore(args.checkpoint)
 
     return algo, env_creator
@@ -166,6 +164,10 @@ def run_one_episode(algo, env_creator, seed):
 
         }
     
+    # debug to see if episode_metrics are being logged correctly
+    if not metrics_by_agent:
+        print(f"[WARNING] No episode_metrics found for seed={seed}, steps={step_count}")
+
     per_agent_path = []
     per_agent_dcpa = []
     per_agent_risk = []
@@ -203,7 +205,18 @@ def run_one_episode(algo, env_creator, seed):
     }
         
 def main():
+    import ray 
+    
     args = parse_args()
+
+    # Initialize Ray BEFORE importing RLlib to avoid Windows import hangs
+    if not ray.is_initialized():
+        ray.init(
+            ignore_reinit_error=True, 
+            _temp_dir=None, 
+            include_dashboard=False,
+            num_cpus=1
+        )
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     output_dir = Path(f"policy_eval_case{args.case}_{timestamp}") / f"seed_{args.seed}"

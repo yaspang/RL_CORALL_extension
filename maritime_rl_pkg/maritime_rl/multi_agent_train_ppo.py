@@ -44,6 +44,8 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--route_len_nmi", type=float, default=2.0, help="Route length in nautical miles (scaling)")
+    p.add_argument("--sim_time", type=float, default=300.0, help="Max simulation time in seconds (scaling)")
     p.add_argument("--eval_every", type=int, default=10)
     p.add_argument("--n_eval_episodes", type=int, default=3, help="Number of evaluation episodes to run at each evaluation checkpoint")
     p.add_argument("--ckpt_every", type=int, default=25, help="How often (in training iterations) to save checkpoints")
@@ -137,12 +139,14 @@ def main():
 
     def env_creator(config):
         case_number = config.get("case_number", args.case)
-        return MultiShipParallelEnv(
+        env = MultiShipParallelEnv(
             case_number=case_number, 
-            dt=config.get("dt", 0.2),
-            sim_time=config.get("sim_time", 300.0),
+            dt=config.get("dt", 0.5),
+            sim_time=config.get("sim_time", args.sim_time),
+            route_len_nmi=config.get("route_len_nmi", args.route_len_nmi),
             seed=config.get("seed", args.seed)
         )
+        return env
 
     # register PettingZoo parallel env with RLlib 
     tune.register_env("corall_mappo_env", lambda cfg: ParallelPettingZooEnv(env_creator(cfg)))
@@ -160,7 +164,6 @@ def main():
         """
         Tell RLlib that all agents share one policy (indicate MAPPO type policy)
         """
-       
         return "shared_policy"
     
     # Build PPO algorithm configuration using RLlib's config API based on docs available
@@ -171,13 +174,14 @@ def main():
             env_config={
                 "case_number": args.case,
                 "seed": args.seed,
+                "sim_time": args.sim_time,
+                "route_len_nmi": args.route_len_nmi,
             }, 
         )
         .framework("torch")
         .env_runners(
             num_env_runners=args.num_workers,
-            rollout_fragment_length=args.rollout_frag,
-            batch_mode="complete_episodes"
+            rollout_fragment_length=args.rollout_frag
         )
         .training(
             lr=args.lr,
