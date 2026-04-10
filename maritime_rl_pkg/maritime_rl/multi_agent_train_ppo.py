@@ -83,9 +83,8 @@ def run_policy_evaluation(algo, env_creator, n_eval_episodes=5):
             for agent_id, reward in rewards.items():
                 ep_return_by_agent[agent_id] += float(reward)
 
-            # In multi-agent maritime scenarios, continue until ALL agents are done 
-            # to preserve complete trajectories for each agent's learning
-            if all(terminations.values()) or all(truncations.values()):
+            # continue until time limit (all agents uniformly truncated)
+            if all(truncations.values()):
                 break
 
         # mean return over agents for this eval episode
@@ -101,6 +100,11 @@ def run_policy_evaluation(algo, env_creator, n_eval_episodes=5):
     }
 
 def moving_average(values, window=10):
+    """
+    Compute moving average of a list of values with specified window size, ignoring NaNs. 
+    
+    Returns array of same length with NaN for positions where moving average is not defined.
+    """
     vals = np.asarray(values, dtype=float)
     if len(vals) == 0: 
         return vals
@@ -133,7 +137,7 @@ def main():
 
     from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
 
-    # Explicitly initialize Ray with timeout to avoid hangs on Windows
+    # explicitly initialize Ray with timeout to avoid hangs on Windows
     if not ray.is_initialized():
         ray.init(ignore_reinit_error=True, _temp_dir=None, include_dashboard=False)
 
@@ -162,11 +166,11 @@ def main():
 
     def policy_mapping_fn(agent_id, *args, **kwargs):
         """
-        Tell RLlib that all agents share one policy (indicate MAPPO type policy)
+        Tell RLlib that all agents share one policy (indicate PPO type policy)
         """
         return "shared_policy"
     
-    # Build PPO algorithm configuration using RLlib's config API based on docs available
+    # Build PPO algorithm configuration using RLlib's config API based on docs  
     config = (
         PPOConfig()
         .environment(
@@ -208,7 +212,7 @@ def main():
     # instantiate PPO algorithm with config
     algo = PPO(config=config)
 
-    # Create subdirectory for checkpoints
+    # create subdirectory for checkpoints
     checkpoint_dir = output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -236,7 +240,7 @@ def main():
         xs_train.append(i+1)
         ys_train.append(rew)
 
-        # Run evaluation periodically
+        # run evaluation periodically
         eval_return_mean = float("nan")
         eval_ep_length_mean = float("nan")
         
