@@ -34,6 +34,7 @@ def parse_args():
     p.add_argument("--sim_time", type=float, default=300.0, help="Total simulation time in seconds for each episode")
     p.add_argument("--route_len_nmi", type=float, default=40.0, help="Route length in nautical miles (scaling factor for environment)")
     p.add_argument("--num_workers", type=int, default=0, help="Number of parallel workers to use for evaluation (default: 0 for standalone eval)")
+    p.add_argument("--save_first_history", action="store_true", help="Save only the first episode history (useful for overlay figures)")
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
 
     return p.parse_args()
@@ -41,6 +42,31 @@ def parse_args():
 def safe_mean(values):
     vals = [v for v in values if v is not None and not (isinstance(v, float) and np.isnan(v))]
     return float(np.mean(vals)) if len(vals) > 0 else float('nan')
+
+def init_history(env, seed, args, checkpoint):
+    """Initialize history tracking for an episode."""
+    return {
+        "t": [float(env.t)],
+        "X_all": [env.X_all.copy()],
+        "pair_risk": [env.pair_risk.copy()],
+        "pair_dcpa": [env.pair_dcpa.copy()],
+        "pair_dist": [env.pair_dist.copy()],
+        "pair_tcpa": [env.pair_tcpa.copy()],
+        "agents": list(env.agents),
+        "case": int(args.case),
+        "seed": int(seed),
+        "baseline": "",
+        "checkpoint": str(checkpoint),
+    }
+
+def append_history(history, env):
+    """Append current environment state to history."""
+    history["t"].append(float(env.t))
+    history["X_all"].append(env.X_all.copy())
+    history["pair_risk"].append(env.pair_risk.copy())
+    history["pair_dcpa"].append(env.pair_dcpa.copy())
+    history["pair_dist"].append(env.pair_dist.copy())
+    history["pair_tcpa"].append(env.pair_tcpa.copy())
 
 def build_algo_and_env(args):
     from ray import tune
@@ -106,7 +132,7 @@ def build_algo_and_env(args):
 
     return algo, env_creator
 
-def run_one_episode(algo, env_creator, seed, args):
+def run_one_episode(algo, env_creator, seed, args, capture_history=False, checkpoint=""):
     env = env_creator({"seed": seed})
     obs, infos = env.reset(seed=seed)
 
@@ -118,6 +144,7 @@ def run_one_episode(algo, env_creator, seed, args):
 
     reward_by_agent = {agent: 0.0 for agent in env.agents}
     final_infos = None
+    history = init_history(env, seed, args, checkpoint) if capture_history else None
 
     while (not done) and (step_count < max_steps):
         actions = {}
@@ -129,6 +156,9 @@ def run_one_episode(algo, env_creator, seed, args):
         obs, rewards, terminations, truncations, infos = env.step(actions)
 
         step_count += 1
+        
+        if capture_history:
+            append_history(history, env)
 
         for agent_id, reward in rewards.items():
             reward_by_agent[agent_id] += float(reward)
@@ -156,7 +186,7 @@ def run_one_episode(algo, env_creator, seed, args):
 
     # fallbacks if episode_metrics not present
     if not metrics_by_agent:
-        return{
+        fallback_row = {
             "episode_steps": step_count, 
             "episode_return_mean": float(np.mean(list(reward_by_agent.values()))),
             "episode_return_ownship": float(reward_by_agent.get("ship_0", float('nan'))),
@@ -167,6 +197,8 @@ def run_one_episode(algo, env_creator, seed, args):
             "path_length_m_ownship": float("nan"),
             "min_dcpa_m_mean": float("nan"),
             "min_dcpa_m_ownship": float("nan"),
+            "min_tcpa_s_mean": float("nan"),
+            "min_tcpa_s_ownship": float("nan"),
             "risk_exposure_mean": float("nan"),
             "risk_exposure_ownship": float("nan"),
             "min_actual_sep_m_mean": float("nan"),
@@ -177,6 +209,8 @@ def run_one_episode(algo, env_creator, seed, args):
             "completion_time_s_mean": float("nan"),
             "completion_time_s_ownship": float("nan"),
         }
+        env.close() if hasattr(env, "close") else None
+        return fallback_row, history
     
     # debug to see if episode_metrics are being logged correctly
     if not metrics_by_agent:
@@ -184,6 +218,7 @@ def run_one_episode(algo, env_creator, seed, args):
 
     per_agent_path = []
     per_agent_dcpa = []
+    per_agent_tcpa = []
     per_agent_risk = []
     per_agent_success = []
     per_agent_collision = []
@@ -195,6 +230,7 @@ def run_one_episode(algo, env_creator, seed, args):
     for agent_id, epm in metrics_by_agent.items():
         per_agent_path.append(float(epm.get("path_length_m", np.nan)))
         per_agent_dcpa.append(float(epm.get("min_dcpa_m", np.nan)))
+        per_agent_tcpa.append(float(epm.get("min_tcpa_s", np.nan)))
         per_agent_risk.append(float(epm.get("risk_exposure", np.nan)))
         per_agent_success.append(int(bool(epm.get("success", 0))))
         per_agent_collision.append(int(bool(epm.get("collision", 0))))
@@ -208,7 +244,7 @@ def run_one_episode(algo, env_creator, seed, args):
         
     own = metrics_by_agent.get("ship_0", {})
 
-    return {
+    row = {
         "episode_steps": step_count, 
         "episode_return_mean": float(np.mean(list(reward_by_agent.values()))),
         "episode_return_ownship": float(reward_by_agent.get("ship_0", np.nan)),
@@ -219,6 +255,8 @@ def run_one_episode(algo, env_creator, seed, args):
         "path_length_m_ownship": float(own.get("path_length_m", np.nan)),
         "min_dcpa_m_mean": float(np.nanmean(per_agent_dcpa)),
         "min_dcpa_m_ownship": float(own.get("min_dcpa_m", np.nan)),
+        "min_tcpa_s_mean": float(np.nanmean(per_agent_tcpa)),
+        "min_tcpa_s_ownship": float(own.get("min_tcpa_s", np.nan)),
         "risk_exposure_mean": float(np.nanmean(per_agent_risk)),
         "risk_exposure_ownship": float(own.get("risk_exposure", np.nan)),
         "min_actual_sep_m_mean": float(np.nanmean(per_agent_min_sep)),
@@ -229,6 +267,10 @@ def run_one_episode(algo, env_creator, seed, args):
         "completion_time_s_mean": float(np.nanmean(per_agent_ct)) if per_agent_ct else float("nan"),
         "completion_time_s_ownship": float(own.get("completion_time_s", np.nan)),
     }
+    
+    env.close() if hasattr(env, "close") else None
+    
+    return row, history
         
 def main():
     import ray 
@@ -247,17 +289,29 @@ def main():
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     output_dir = Path(f"policy_eval_case{args.case}_{timestamp}") / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    histories_dir = None
+    if args.save_first_history:
+        histories_dir = output_dir / "episode_histories"
+        histories_dir.mkdir(parents=True, exist_ok=True)
 
     algo, env_creator = build_algo_and_env(args)
 
     per_episode_results = []
 
     for ep in range(args.episodes):
-        ep_seed = args.seed + ep  
-        row = run_one_episode(algo, env_creator, seed=ep_seed, args=args)
+        ep_seed = args.seed + ep
+        capture_history = bool(args.save_first_history and ep == 0)
+        row, history = run_one_episode(algo, env_creator, seed=ep_seed, args=args, capture_history=capture_history, checkpoint=args.checkpoint)
         row["episode_index"] = ep
         row["episode_seed"] = ep_seed
         per_episode_results.append(row)
+        
+        if capture_history and history and histories_dir:
+            from .episode_overlay_tools import save_episode_history
+            hist_path = histories_dir / f"trained_case{args.case}_seed{args.seed}_ep{ep:03d}.json.npz"
+            save_episode_history(history, hist_path)
+            print(f"[saved] history -> {hist_path}")
 
         print(
             f"[eval ep {ep+1}/{args.episodes}] " 
@@ -284,6 +338,8 @@ def main():
         "path_length_m_ownship_mean": safe_mean([r["path_length_m_ownship"] for r in per_episode_results]),
         "min_dcpa_m_mean": safe_mean([r["min_dcpa_m_mean"] for r in per_episode_results]),
         "min_dcpa_m_ownship_mean": safe_mean([r["min_dcpa_m_ownship"] for r in per_episode_results]),
+        "min_tcpa_s_mean": safe_mean([r["min_tcpa_s_mean"] for r in per_episode_results]),
+        "min_tcpa_s_ownship_mean": safe_mean([r["min_tcpa_s_ownship"] for r in per_episode_results]),
         "risk_exposure_mean": safe_mean([r["risk_exposure_mean"] for r in per_episode_results]),
         "risk_exposure_ownship_mean": safe_mean([r["risk_exposure_ownship"] for r in per_episode_results]),
         "min_actual_sep_m_mean": safe_mean([r["min_actual_sep_m_mean"] for r in per_episode_results]),
@@ -310,6 +366,8 @@ def main():
         "path_length_m_ownship",
         "min_dcpa_m_mean",
         "min_dcpa_m_ownship",
+        "min_tcpa_s_mean",
+        "min_tcpa_s_ownship",
         "risk_exposure_mean",
         "risk_exposure_ownship",
         "min_actual_sep_m_mean",

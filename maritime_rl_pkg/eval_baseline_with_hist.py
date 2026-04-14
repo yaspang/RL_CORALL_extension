@@ -1,20 +1,3 @@
-"""
-Evaluate a trained policy for a trained shared-policy PPO model using CORALL Imazu case on the MultiShipParallelEnv environment.
-
-Usage example:
-python -m maritime_rl_pkg.maritime_rl.evaluate_trained_policy ^
-    --checkpoint "C:/path/to/checkpoint_dir/checkpoint_000200" ^
-    --case 2 ^
-    --episodes 50 ^
-    --seed 0
-
-> rebuild PPO algorithm with same env + shared policy config as training, load checkpoint, run evaluation episodes, and print/save results (e.g. to csv or json)
-> restore trained policy from checkpoint, run evaluation episodes, and print/save results (e.g. to csv or json)
-> run deterministic rollouts with explore=False to evaluate the learned policy's performance without stochasticity from action sampling, and print/save results (e.g. to csv or json)
-> log per-episode and aggregate COLAV metrics
-
-"""
-
 import argparse
 import json
 import csv
@@ -22,13 +5,11 @@ import time
 from pathlib import Path
 
 import numpy as np
-import ray
 
 from .episode_overlay_tools import save_episode_history
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", type=str, required=True, help="Path to the trained model checkpoint to load for evaluation")
     p.add_argument("--case", type=int, required=True, help="CORALL Imazu case number for the evaluation")
     p.add_argument("--episodes", type=int, default=20, help="Number of episodes to run for evaluation")
     p.add_argument("--seed", type=int, default=0, help="Base random seed for evaluation")
@@ -41,84 +22,42 @@ def parse_args():
     p.add_argument("--save_first_history", action="store_true", help="Save only the first episode history (useful for overlay figures)")
     return p.parse_args()
 
+
 def safe_mean(values):
     vals = [v for v in values if v is not None and not (isinstance(v, float) and np.isnan(v))]
     return float(np.mean(vals)) if len(vals) > 0 else float('nan')
 
-def build_algo_and_env(args):
-    from ray import tune
-    from ray.rllib.algorithms.ppo import PPOConfig
-    from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
-    from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
+
+def build_env_creator(args):
+    from maritime_rl_pkg.maritime_rl.CORALL_comparison_env import CORALLComparisonEnv
 
     def env_creator(config):
-        return MultiShipParallelEnv(
+        return CORALLComparisonEnv(
             case_number=config.get("case_number", args.case),
             dt=config.get("dt", args.dt),
             sim_time=config.get("sim_time", args.sim_time),
             route_len_nmi=config.get("route_len_nmi", args.route_len_nmi),
-            render_mode="human" if args.render else "none",
+            render_mode="human" if args.render else None, 
             seed=config.get("seed", args.seed),
         )
-    
-    # register env under a unique name for eval run
-    env_name = f"corall_ppo_eval_env_case{args.case}_seed{args.seed}"
-    tune.register_env(env_name, lambda cfg: ParallelPettingZooEnv(env_creator(cfg)))
+    return env_creator
 
-    # probe spaces
-    tmp_env = env_creator({"case_number": args.case, "seed": args.seed})
-    obs_space = tmp_env.observation_space(tmp_env.agents[0])
-    act_space = tmp_env.action_space(tmp_env.agents[0])
-    tmp_env.close() if hasattr(tmp_env, "close") else None
-
-    def policy_mapping_fn(agent_id, *args, **kwargs):
-        return "shared_policy"
-
-    config = (
-        PPOConfig()
-        .environment(
-            env=env_name,
-            env_config={
-                "case_number": args.case,
-                "dt": args.dt,
-                "sim_time": args.sim_time,
-                "route_len_nmi": args.route_len_nmi,
-                "seed": args.seed,
-            },
-        )
-        .framework("torch")
-        .env_runners(
-            num_env_runners=args.num_workers,
-        )
-        .multi_agent(
-            policies={"shared_policy": (None, obs_space, act_space, {})}, 
-            policy_mapping_fn=policy_mapping_fn,
-            policies_to_train=["shared_policy"]
-        )
-        .api_stack(
-            enable_rl_module_and_learner=False,
-            enable_env_runner_and_connector_v2=False
-        )
-        .debugging(seed=args.seed)
-    )
-
-    algo = config.build_algo()
-    algo.restore(args.checkpoint)
-    return algo, env_creator
 
 def init_history(env, seed, args):
     return {
-        "t": [float(env.t)], 
+        "t": [float(env.t)],
         "X_all": [env.X_all.copy()],
         "pair_risk": [env.pair_risk.copy()],
         "pair_dcpa": [env.pair_dcpa.copy()],
         "pair_dist": [env.pair_dist.copy()],
+        "pair_tcpa": [env.pair_tcpa.copy()],
         "agents": list(env.agents),
-        "case": int(args.case), 
-        "seed": int(seed), 
-        "baseline": "", 
-        "checkpoint": str(args.checkpoint),
+        "case": int(args.case),
+        "seed": int(seed),
+        "baseline": "CORALL_rule_based",
+        "checkpoint": "",
     }
+
 
 def append_history(history, env):
     history["t"].append(float(env.t))
@@ -126,12 +65,13 @@ def append_history(history, env):
     history["pair_risk"].append(env.pair_risk.copy())
     history["pair_dcpa"].append(env.pair_dcpa.copy())
     history["pair_dist"].append(env.pair_dist.copy())
+    history["pair_tcpa"].append(env.pair_tcpa.copy())
 
 
-def run_one_episode(algo, env_creator, seed, args, capture_history=False):
+
+def run_one_episode_baseline(env_creator, seed, args, capture_history=False):
     env = env_creator({"seed": seed})
     obs, infos = env.reset(seed=seed)
-    policy = algo.get_policy("shared_policy")
 
     done = False
     step_count = 0
@@ -140,13 +80,12 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
     final_infos = None
     history = init_history(env, seed, args) if capture_history else None
 
+    
     while (not done) and (step_count < max_steps):
-        actions = {}
+        # CORALL baseline: environment ignores action and uses internal CORALL guidance
+        # Just pass dummy action for the required agent
+        actions = {"ship_0": np.array([0.0], dtype=np.float32)}
 
-        for agent_id, agent_obs in obs.items():
-            action, _, _ = policy.compute_single_action(agent_obs, explore=False)
-            actions[agent_id] = action
-        
         obs, rewards, terminations, truncations, infos = env.step(actions)
         step_count += 1
 
@@ -155,10 +94,10 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
 
         for agent_id, reward in rewards.items():
             reward_by_agent[agent_id] += float(reward)
-        
+
         final_infos = infos
         done = all(terminations.values()) or any(truncations.values())
-
+    
     # extract episode metrics
     metrics_by_agent = {}
 
@@ -167,7 +106,7 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
             epm = info.get("episode_metrics", None)
             if isinstance(epm, dict):
                 metrics_by_agent[agent_id] = epm
-    
+
     own = metrics_by_agent.get("ship_0", {})
     ownship_success = float(bool(own.get("success", 0)))
     
@@ -186,6 +125,8 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
             "path_length_m_ownship": float("nan"),
             "min_dcpa_m_mean": float("nan"),
             "min_dcpa_m_ownship": float("nan"),
+            "min_tcpa_s_mean": float("nan"),
+            "min_tcpa_s_ownship": float("nan"),
             "risk_exposure_mean": float("nan"),
             "risk_exposure_ownship": float("nan"),
             "min_actual_sep_m_mean": float("nan"),
@@ -196,22 +137,23 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
             "completion_time_s_mean": float("nan"),
             "completion_time_s_ownship": float("nan"),
         }
-
         return row, history
-    
-    per_agent_path, per_agent_dcpa, per_agent_risk = [], [], []
+
+    per_agent_path, per_agent_dcpa, per_agent_tcpa, per_agent_risk = [], [], [], []
     per_agent_success, per_agent_collision, per_agent_near_miss = [], [], []
     per_agent_min_sep, per_agent_goal_progress, per_agent_ct = [], [], []
 
     for agent_id, epm in metrics_by_agent.items():
         per_agent_path.append(float(epm.get("path_length_m", np.nan)))
         per_agent_dcpa.append(float(epm.get("min_dcpa_m", np.nan)))
+        per_agent_tcpa.append(float(epm.get("min_tcpa_s", np.nan)))
         per_agent_risk.append(float(epm.get("risk_exposure", np.nan)))
         per_agent_success.append(int(bool(epm.get("success", 0))))
         per_agent_collision.append(int(bool(epm.get("collision", 0))))
         per_agent_near_miss.append(int(bool(epm.get("near_miss", 0))))
         per_agent_min_sep.append(float(epm.get("min_actual_sep_m", np.nan)))
         per_agent_goal_progress.append(float(epm.get("goal_progress", np.nan)))
+        
         ct = epm.get("completion_time_s", None)
         if ct is not None and np.isfinite(ct): 
             per_agent_ct.append(float(ct))
@@ -229,6 +171,8 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
         "path_length_m_ownship": float(own.get("path_length_m", np.nan)),
         "min_dcpa_m_mean": float(np.nanmean(per_agent_dcpa)),
         "min_dcpa_m_ownship": float(own.get("min_dcpa_m", np.nan)),
+        "min_tcpa_s_mean": float(np.nanmean(per_agent_tcpa)),
+        "min_tcpa_s_ownship": float(own.get("min_tcpa_s", np.nan)),
         "risk_exposure_mean": float(np.nanmean(per_agent_risk)),
         "risk_exposure_ownship": float(own.get("risk_exposure", np.nan)),
         "min_actual_sep_m_mean": float(np.nanmean(per_agent_min_sep)),
@@ -240,39 +184,29 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False):
         "completion_time_s_ownship": float(own.get("completion_time_s", np.nan)),
     }
     return row, history
+
         
 def main():
-    import ray 
-    
     args = parse_args()
-
-    # Initialize Ray BEFORE importing RLlib to avoid Windows import hangs
-    if not ray.is_initialized():
-        ray.init(
-            ignore_reinit_error=True, 
-            _temp_dir=None, 
-            include_dashboard=False,
-            num_cpus=1
-        )
-
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    output_dir = Path(f"policy_eval_case{args.case}_{timestamp}") / f"seed_{args.seed}"
+    output_dir = Path(f"corall_baseline_case{args.case}_{timestamp}") / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
     histories_dir = output_dir / "episode_histories"
     histories_dir.mkdir(parents=True, exist_ok=True)
-    algo, env_creator = build_algo_and_env(args)
+
+    env_creator = build_env_creator(args)
     per_episode_results = []
 
     for ep in range(args.episodes):
         ep_seed = args.seed + ep  
         capture_history = bool(args.save_histories or (args.save_first_history and ep == 0))
-        row, history = run_one_episode(algo, env_creator, seed=ep_seed, args=args, capture_history=capture_history)
+        row, history = run_one_episode_baseline(env_creator, seed=ep_seed, args=args, capture_history=capture_history)
         row["episode_index"] = ep
         row["episode_seed"] = ep_seed
         per_episode_results.append(row)
 
         if history is not None: 
-            hist_path = histories_dir / f"trained_case{args.case}_seed{ep_seed}_ep{ep:03d}.json"
+            hist_path = histories_dir / f"baseline_case{args.case}_seed{ep_seed}_ep{ep:03d}.npz"
             save_episode_history(history, hist_path)
             print(f"[saved] history -> {hist_path}")
 
@@ -288,7 +222,7 @@ def main():
         )
 
     summary = {
-        "checkpoint": args.checkpoint,
+        "baseline": "CORALL_rule_based",
         "case": args.case,
         "episodes": args.episodes,
         "seed_base": args.seed,
@@ -301,6 +235,8 @@ def main():
         "path_length_m_ownship_mean": safe_mean([r["path_length_m_ownship"] for r in per_episode_results]),
         "min_dcpa_m_mean": safe_mean([r["min_dcpa_m_mean"] for r in per_episode_results]),
         "min_dcpa_m_ownship_mean": safe_mean([r["min_dcpa_m_ownship"] for r in per_episode_results]),
+        "min_tcpa_s_mean": safe_mean([r["min_tcpa_s_mean"] for r in per_episode_results]),
+        "min_tcpa_s_ownship_mean": safe_mean([r["min_tcpa_s_ownship"] for r in per_episode_results]),
         "risk_exposure_mean": safe_mean([r["risk_exposure_mean"] for r in per_episode_results]),
         "risk_exposure_ownship_mean": safe_mean([r["risk_exposure_ownship"] for r in per_episode_results]),
         "min_actual_sep_m_mean": safe_mean([r["min_actual_sep_m_mean"] for r in per_episode_results]),
@@ -313,7 +249,7 @@ def main():
     }
     
     # save per-episode csv
-    csv_path = output_dir / "policy_eval_per_episode_VIS.csv"
+    csv_path = output_dir / "policy_eval_per_episode.csv"
     fieldnames = [
         "episode_index",
         "episode_seed",
@@ -327,6 +263,8 @@ def main():
         "path_length_m_ownship",
         "min_dcpa_m_mean",
         "min_dcpa_m_ownship",
+        "min_tcpa_s_mean",
+        "min_tcpa_s_ownship",
         "risk_exposure_mean",
         "risk_exposure_ownship",
         "min_actual_sep_m_mean",
@@ -356,10 +294,13 @@ def main():
     print(f"\nSaved per-episode CSV to: {csv_path}")
     print(f"Saved summary JSON to: {summary_path}")
 
-    # Clean up Ray resources
-    import ray
-    if ray.is_initialized():
-        ray.shutdown()
+    # Clean up Ray resources (if Ray was used)
+    try:
+        import ray
+        if ray.is_initialized():
+            ray.shutdown()
+    except ImportError:
+        pass  # Ray not installed, skip cleanup
 
 
 if __name__ == "__main__":

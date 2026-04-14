@@ -27,7 +27,7 @@ from pettingzoo.utils import ParallelEnv
 from .path_setup import ensure_paths
 ensure_paths()
 
-# importing CORALL core modules (from CORALL repo)
+# importing CORALL core modules (from repo)
 from utils.imazu_cases import get_obstacle_data
 from navigation.planning import waypoint_selection, planning
 from dynamics.controller import controller
@@ -35,51 +35,51 @@ from dynamics.actuator_modeling import actuator_modeling
 from dynamics.vessel_dynamics import vessel_dynamics
 from core.integration import integration
 from risk_assessment.cpa_calculations import cpa_calculations
+from risk_assessment.cpa_calculations_0speed import cpa_calculations_0speed
 from risk_assessment.risk_calculations import risk_calculations
 from navigation.reactive_avoidance import reactive_avoidance
+
+# future: spatial optimization (trying to implement later to optimize CPA calculations for many agents - see maritime_rl_pkg/maritime_rl/spatial_optimization.py)
+from .spatial_optimization import AABBBroadPhase
 
 NMI = 1852.0   # meters per nautical mile
 
 @dataclass
 class ObsNorm: 
-    """Normalization constants for observation features"""
+    """Observation feature bounds (not scaling)"""
 
-    # position scales (nmi)
-    pos_scale_nmi: float = 40.0               # typical scenario size (CORALL)
-    # speed / turn rate scales
-    u_max: float = 10.0                       # m/s (match action decoder)
-    r_scale: float = 0.25                     # rad/s (tunable -> keep within [-1, 1] with clip)
-    b_scale: float = 5.0                      # __ bias 
-
-    # CPA scaling 
-    dcpa_scale_m: float = 400.0               # m, normalize DCPA
-    tcpa_scale_s: float = 300.0               # s, normalize TCPA
-    # clip range for safety
-    clip: float = 1.0
+    # Position bounds in meters (scenarios ~16km extent)
+    pos_max_m: float = 15000.0
+    
+    # Speed bounds in m/s
+    u_max: float = 15.0
+    
+    # Turn rate bounds in rad/s (typical ship rates)
+    r_max: float = 0.5
+    
+    # Actuator bias bounds (typically normalized)
+    b_max: float = 1.0
 
 
 class MultiShipParallelEnv(ParallelEnv):
     """
     CORALL case-driven multi-agent environment for PPO algorithm
 
-    Observation (agent k)
+    Observation (agent k):
 
-        own_state_norm: 
-            - x_nmi / pos_scale, y_nmi / pos_scale
+        own_state (6 features):
+            - x (meters), y (meters)
             - sin(psi), cos(psi)
-            - r / r_scale
-            - b / b_scale
-            - u / u_max
+            - r (rad/s) - turn rate
+            - u (m/s) - surge speed
+            - b - actuator bias
         
-        per other ship j != k:
-            - dx_nmi / pos_scale, dy_nmi / pos_scale
-            - dist_nmi / pos_scale
-            - sin(bearing), cos(bearing)
-            - DCPA / dcpa_scale
-            - TCPA / tcpa_scale
-            - risk [0, 1] -> clipped
+        per other ship j != k (4 features each):
+            - dx (meters) - relative position
+            - dy (meters) - relative position
+            - sin(bearing_rel), cos(bearing_rel) - relative bearing
 
-    All features clipped to [-clip, clip] for normalization of observation space
+    All features are continuous (no arbitrary discretization).
     """
 
     metadata = {"render_modes": ["human"], "name": "corall_multiship_mappo_v0"}
@@ -89,7 +89,7 @@ class MultiShipParallelEnv(ParallelEnv):
         self, 
         case_number: int, 
         dt: float = 0.5, 
-        sim_time: float = 10_000.0, 
+        sim_time: float = 1950.0, 
         render_mode: Optional[str] = None, 
         # action discretization
         n_heading: int = 7, 
@@ -103,11 +103,11 @@ class MultiShipParallelEnv(ParallelEnv):
         # observation normalization
         obs_norm: ObsNorm = ObsNorm(),
         # waypoint generation parameter
-        route_len_nmi: float = 40.0,
+        route_len_nmi: float = 2.0,
+        # spatial optimization (AABB broad-phase filtering for pairwise CPA)
+        enable_aabb_filtering: bool = False,
+        aabb_radius_m: float = 1500.0,
         seed: Optional[int] = None,
-        # change mode of sim for baseline vs learning-based use
-        traffic_mode: str = "policy", # "policy" or "baseline"
-        ownship_mode: str = "policy", # "policy" or "baseline"
     ): 
 
         super().__init__()
@@ -115,8 +115,6 @@ class MultiShipParallelEnv(ParallelEnv):
         self.dt = float(dt)
         self.sim_time = float(sim_time)
         self.render_mode = render_mode
-        self.traffic_mode = str(traffic_mode)
-        self.ownship_mode = str(ownship_mode)
         self.n_heading = int(n_heading)
         self.n_speed = int(n_speed)
     
@@ -128,10 +126,14 @@ class MultiShipParallelEnv(ParallelEnv):
         self.norm = obs_norm
     
         self.route_len_nmi = float(route_len_nmi)
+        
+        # future: spatial optimization
+        self.enable_aabb_filtering = bool(enable_aabb_filtering)
+        self.aabb_radius_m = float(aabb_radius_m)
     
         self.rng = np.random.default_rng(seed)
 
-        # Determine number of agents from CORALL case
+        # determine number of agents from CORALL case
         Xob, Yob, Vob, psiob = get_obstacle_data(self.case_number)
         self.n_obstacles = len(Xob)
         self.n_agents = 1 + self.n_obstacles
@@ -144,12 +146,26 @@ class MultiShipParallelEnv(ParallelEnv):
             agent: spaces.MultiDiscrete([self.n_heading, self.n_speed]) for agent in self.agents
         }
     
-        # Observation Spaces: same for all n_agents 
-        own_dim = 7             # [x, y, sin(psi), cos(psi), r, b, u]
-        per_other_dim = 8       # dx, dy, dist, sinB, cosB, dcpa, tcpa, risk -- B is rel. bearing of other ship to ownship
+        # Observation Spaces: same for all n_agents
+        # Own state: [x, y, sin(psi), cos(psi), r, u, b]
+        own_dim = 7
+        # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel)]
+        per_other_dim = 4
         obs_dim = own_dim + (self.n_agents - 1) * per_other_dim
+        
+        # Bounds for observation space
+        low_bounds = np.array(
+            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, 0.0, -self.norm.b_max] +
+            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0] * (self.n_agents - 1),
+            dtype=np.float32
+        )
+        high_bounds = np.array(
+            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.u_max, self.norm.b_max] +
+            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0] * (self.n_agents - 1),
+            dtype=np.float32
+        )
         self._obs_space = {
-            agent: spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32) for agent in self.agents
+            agent: spaces.Box(low=low_bounds, high=high_bounds, dtype=np.float32) for agent in self.agents
         }
     
         # Internal buffers (to start with, will be populated properly in reset())
@@ -175,6 +191,9 @@ class MultiShipParallelEnv(ParallelEnv):
         # Initialize dictionaries for evaluation metrics
         self.episode_metrics = {}
         self.prev_done_metrics = {}
+        
+        # Track previous goal progress for delta-progress reward shaping
+        self.prev_goal_progress_all = {}
 
         # Route / planning data cache
         ## routes are static, straight lines, so will compute downstream route-heading references once and reuse them 
@@ -187,7 +206,10 @@ class MultiShipParallelEnv(ParallelEnv):
         self.pair_dist = np.full((self.n_agents, self.n_agents), np.inf, dtype=float)
         self.pair_risk = np.zeros((self.n_agents, self.n_agents), dtype=float)
     
+
+    # ---------------------------------------------------------------------
     # PettingZoo API
+    # ---------------------------------------------------------------------
     def observation_space(self, agent):
         return self._obs_space[agent]
     
@@ -218,9 +240,9 @@ class MultiShipParallelEnv(ParallelEnv):
 
         X_all = np.zeros((self.n_agents, 6), dtype=float)
 
-        # Ownship initial state
-        ## keep CORALL encounter geometry but set ownship at origin, with zero heading
-        ## set ownship speed as the same nominal traffic speed scale as other ships in the case (for more consistent dynamics across cases and easier learning)
+        # "Ownship" as expressed in CORALL initial state
+        ## keep CORALL encounter geometry but set ownship at origin and its speed at same nominal traffic speed scale as other ships in the case 
+        ## (for more consistent dynamics across cases and easier learning)
 
         if len(Vob) > 0:
             u0 = float(np.clip(Vob[0], self.u_min, self.u_max))
@@ -230,7 +252,7 @@ class MultiShipParallelEnv(ParallelEnv):
         self.u_des_all[0] = u0
         X_all[0, :] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, u0], dtype=float)
 
-        # Other ship initial states
+        # Target ship initial states
         for j in range(self.n_obstacles):
             u_j = float(np.clip(Vob[j], self.u_min, self.u_max))
             self.u_des_all[j + 1] = u_j
@@ -306,123 +328,75 @@ class MultiShipParallelEnv(ParallelEnv):
     def update_pairwise_geometry_cache(self) -> None:
         """
         Compute pairwise CPA / risk geometry exactly once for the current state and reuse it in observations and reward shaping
-            - save computation time by caching pairwise geometry calculations since they are expensive to compute 
-            - (involve relative geometry of both current and previous positions for each pair) 
+            - For ownship (agent 0): use velocity-based CPA (cpa_calculations_0speed) to handle active maneuvering
+            - Uses current state (heading + speed) for velocity prediction -> more responsive to RL commands
+            - For obstacles (agents 1+): use projection-based CPA (cpa_calculations) since they follow scripted trajectories
+            - Optional: AABB broad-phase filtering to reduce expensive CPA calculations (recommended for 5+ agents)
         """
 
-        for a in range(self.n_agents):
+        # Get pairs to check: either all pairs (naive) or filtered by AABB (optimized)
+        if self.enable_aabb_filtering and self.n_agents >= 5:
+            # Broad-phase: only check pairs with overlapping AABBs
+            pairs_to_check = AABBBroadPhase.get_overlapping_pairs(self.X_all, self.aabb_radius_m)
+        else:
+            # Naive: check all pairs
+            pairs_to_check = [(a, b) for a in range(self.n_agents) for b in range(a + 1, self.n_agents)]
+
+        # Narrow-phase: compute CPA for all checked pairs
+        for a, b in pairs_to_check:
             xa, ya = float(self.X_all[a, 0]), float(self.X_all[a, 1])
-            xa_prev, ya_prev = float(self.prev_X_all[a, 0]), float(self.prev_X_all[a, 1])
+            psi_a, u_a = float(self.X_all[a, 2]), float(self.X_all[a, 5])
+            # Use current heading + speed for velocity estimate (more responsive to control inputs)
+            vxa = u_a * np.cos(psi_a)
+            vya = u_a * np.sin(psi_a)
 
-            for b in range(a + 1, self.n_agents):
-                xb, yb = float(self.X_all[b, 0]), float(self.X_all[b, 1])
+            xb, yb = float(self.X_all[b, 0]), float(self.X_all[b, 1])
+            psi_b, u_b = float(self.X_all[b, 2]), float(self.X_all[b, 5])
+            # Use current heading + speed for velocity estimate
+            vxb = u_b * np.cos(psi_b)
+            vyb = u_b * np.sin(psi_b)
+
+            dist = float(np.hypot(xa - xb, ya - yb))
+
+            # Use velocity-based CPA for ownship pairs (agent 0 is ownship)
+            # This handles active maneuvering better than projection-based CPA
+            if a == 0:
+                dcpa, tcpa, vrel, alpha, psi_vrel = cpa_calculations_0speed(
+                    xa, ya, xb, yb,
+                    vxa, vya, vxb, vyb,
+                    dist
+                )
+            else:
+                # For non-ownship pairs, use projection-based (shouldn't occur in typical 1+obstacles setup)
+                xa_prev, ya_prev = float(self.prev_X_all[a, 0]), float(self.prev_X_all[a, 1])
                 xb_prev, yb_prev = float(self.prev_X_all[b, 0]), float(self.prev_X_all[b, 1])
-
                 dcpa, tcpa, vrel, alpha, psi_vrel = cpa_calculations(
                     xa, ya, xa_prev, ya_prev,
                     xb, yb, xb_prev, yb_prev,
                     self.dt
                 )
 
-                dist = float(np.hypot(xa - xb, ya - yb))
-                risk = float(risk_calculations(dcpa, tcpa, dist, vrel))
+            risk = float(risk_calculations(dcpa, tcpa, dist, vrel))
 
-                self.pair_dcpa[a, b] = self.pair_dcpa[b, a] = float(dcpa)
-                self.pair_tcpa[a, b] = self.pair_tcpa[b, a] = float(tcpa)
-                self.pair_dist[a, b] = self.pair_dist[b, a] = dist
-                self.pair_risk[a, b] = self.pair_risk[b, a] = risk
-
-    # for baseline CORALL evaluation
-    def heading_speed_to_discrete_action(self, desired_heading_delta, desired_u_cmd):
-        # map heading delta to discrete index (nearest bin)
-        h_vals = np.linspace(-1.0, 1.0, self.n_heading)
-        s_vals = np.linspace(-1.0, 1.0, self.n_speed)
-
-        h_norm = np.clip(desired_heading_delta / self.max_heading_change, -1.0, 1.0)
-        h_idx = int(np.argmin(np.abs(h_vals - h_norm)))
-
-        if self.u_max > self.u_min:
-            s_norm = 2.0 * (desired_u_cmd - self.u_min) / (self.u_max - self.u_min) - 1.0
-        else: 
-            s_norm = 0.0
-
-        s_norm = np.clip(s_norm, -1.0, 1.0)
-        s_idx = int(np.argmin(np.abs(s_vals - s_norm)))
-
-        return np.array([h_idx, s_idx], dtype=np.int64)
-    
-    def get_default_agent_action(self, agent_id: str):
-        k = self.agents.index(agent_id)
-
-        return self.heading_speed_to_discrete_action(
-            desired_heading_delta=0.0, desired_u_cmd=self.u_des_all[k]
-        )
+            self.pair_dcpa[a, b] = self.pair_dcpa[b, a] = float(dcpa)
+            self.pair_tcpa[a, b] = self.pair_tcpa[b, a] = float(tcpa)
+            self.pair_dist[a, b] = self.pair_dist[b, a] = dist
+            self.pair_risk[a, b] = self.pair_risk[b, a] = risk
         
-    # tried to save time, but will delete 
-    def compute_corall_baseline_action(self, agent_id="ship_0"):
-            """
-            CORALL baseline ownship action:
-                psi_ref = psi_wp + Kdir psi_oa, with Kdir = +1 for baseline rule-based mode
-
-            # 1) get current ship state
-            # 2) run same CORALL-style waypoint selection + planning + reactive_avoidance
-            # 3) form desired heading / speed command from CORALL 
-            # 4) map to env discrete action
-            """
-
-            k = self.agents.index(agent_id)
-            if k != 0: 
-                return self.get_default_agent_action(agent_id)
-        
-            # ownship current state in meters / radians
-            x_m = float(self.X_all[k, 0])
-            y_m = float(self.X_all[k, 1])
-            psi_k = float(self.X_all[k, 2])
-
-            # convert ownship position to nmi for CORALL planner compatibility
-            x_nmi = x_m / NMI
-            y_nmi = y_m / NMI
-
-            # current ownship waypoint index
-            i_wpt = int(self.i_wpt_all[k])
-
-            # 1) CORALL waypoint selection
-            i_wpt = waypoint_selection(self.Xwpt_all[k], self.Ywpt_all[k], x_nmi, y_nmi, i_wpt)
-            self.i_wpt_all[k] = i_wpt
-
-            # 2) CORALL path planning 
-            psi_wp = planning(self.Xwpt_all[k], self.Ywpt_all[k], x_nmi, y_nmi, i_wpt)
-
-            # safety fallback
-            if psi_wp is None: 
-                psi_wp = float(self.psi_route_ref_all[k])   # if planner fails, fall back to route heading reference
-            
-            # 3) build obstacle positions in nmi for reactive avoidance
-            x_ob_nmi = []
-            y_ob_nmi = []
-
-            for j in range(1, self.n_agents):
-                x_ob_nmi.append(float(self.X_all[j, 0]) / NMI)
-                y_ob_nmi.append(float(self.X_all[j, 1]) / NMI)
-
-            # 4) CORALL reactive avoidance (using Kdir = +1 for baseline rule-based mode)
-            psi_oa, w_B, w_R, distance_ob, bearing_ob = reactive_avoidance(
-                x_ob_nmi, y_ob_nmi, x_nmi, y_nmi, psi_k, self.t
-            )
-
-            # 5) baseline CORALL using Kdir = +1 (direction to turn)
-            psi_ref = float(psi_wp + psi_oa)
-
-            # convert desired heading to env discrete action
-            desired_heading_delta = self._wrap_angle(psi_ref - psi_k)
-
-            # use nominal ownship cruise speed predefined
-            desired_u_cmd = float(self.u_des_all[k])
-
-            return self.heading_speed_to_discrete_action(desired_heading_delta=desired_heading_delta, desired_u_cmd=desired_u_cmd)
+        # For pairs NOT checked (filtered out by AABB), reset to safe defaults
+        if self.enable_aabb_filtering and self.n_agents >= 5:
+            for a in range(self.n_agents):
+                for b in range(a + 1, self.n_agents):
+                    if (a, b) not in pairs_to_check:
+                        # Far away - set to safe defaults
+                        self.pair_dcpa[a, b] = self.pair_dcpa[b, a] = np.inf
+                        self.pair_tcpa[a, b] = self.pair_tcpa[b, a] = 0.0
+                        self.pair_dist[a, b] = self.pair_dist[b, a] = np.inf
+                        self.pair_risk[a, b] = self.pair_risk[b, a] = 0.0
 
 
     def reset_internal_state(self):
+        """Reinitialize all internal state variables for a new episode"""
         self.t = 0.0
         self.step_count = 0
         self.done = False
@@ -456,6 +430,7 @@ class MultiShipParallelEnv(ParallelEnv):
             agent: {
                 "path_length_m": 0.0,
                 "min_dcpa_m": float("inf"),
+                "min_tcpa_s": float("inf"),
                 "risk_exposure": 0.0,
                 "collision": 0,
                 "success": 0,
@@ -466,6 +441,15 @@ class MultiShipParallelEnv(ParallelEnv):
                 "goal_passed": 0,
             } for agent in self.agents
         }
+        
+        # track which agents have reached their goal (to freeze metrics collection)
+        self.agent_reached_goal = {agent: False for agent in self.agents}
+        
+        # track which agents were truncated in previous step (for handling final observations)
+        self.agent_previously_truncated = {agent: False for agent in self.agents}
+        
+        # Initialize goal progress tracking for all agents (used in delta-progress reward)
+        self.prev_goal_progress_all = {agent: 0.0 for agent in self.agents}
 
         return observations, infos
 
@@ -476,8 +460,6 @@ class MultiShipParallelEnv(ParallelEnv):
         """
 
         # Reset at the START of step if previous episode ended
-        # This ensures termination signals are NOT paired with reset observations
-
         # if previous episode ended, reset environment before processing new actions
         self.prev_X_all = self.X_all.copy()
 
@@ -571,8 +553,32 @@ class MultiShipParallelEnv(ParallelEnv):
             for agent in self.agents:
                 infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
 
+        # IMPORTANT: Handle observations for new API stack RLlib
+        # RLlib needs ONE final observation for agents being truncated (for value function bootstrapping)
+        # but NOT observations for agents already truncated in previous steps
+        observations = {}
+        for k, agent in enumerate(self.agents):
+            is_truncated_this_step = truncations[agent] and not self.agent_previously_truncated[agent]
+            is_not_done = not (truncations[agent] or terminations[agent])
+            # Return obs for: agents that are active OR agents being truncated this step
+            if is_not_done or is_truncated_this_step:
+                observations[agent] = self.get_observation(k)
         
-        observations = {agent: self.get_observation(k) for k, agent in enumerate(self.agents)}
+        # Filter rewards to match observations (only active agents + newly truncated)
+        rewards = {
+            agent: r for agent, r in rewards.items() 
+            if not (truncations[agent] or terminations[agent]) or (truncations[agent] and not self.agent_previously_truncated[agent])
+        }
+        
+        # Filter infos to match observations (RLlib expects alignment)
+        infos = {
+            agent: infos[agent] for agent in observations.keys()
+        }
+        
+        # Update tracking for next step
+        for agent in self.agents:
+            if truncations[agent]:
+                self.agent_previously_truncated[agent] = True
 
         return observations, rewards, terminations, truncations, infos
 
@@ -586,22 +592,17 @@ class MultiShipParallelEnv(ParallelEnv):
     
     def own_state_features(self, k: int) -> np.ndarray:
         x_m, y_m, psi, r, b, u = self.X_all[k, :]
-        x_nmi = x_m / NMI
-        y_nmi = y_m / NMI
     
         feats = np.array([
-
-            x_nmi / self.norm.pos_scale_nmi,
-            y_nmi / self.norm.pos_scale_nmi, 
+            x_m,
+            y_m, 
             np.sin(psi), 
             np.cos(psi), 
-            r / self.norm.r_scale,
-            b / self.norm.b_scale, 
-            u / self.norm.u_max, 
-
+            r,
+            u,
+            b,
         ], dtype=np.float32)
 
-        feats = np.clip(feats, -self.norm.clip, self.norm.clip)
         return feats
 
     
@@ -615,46 +616,27 @@ class MultiShipParallelEnv(ParallelEnv):
                 continue
             
             xj_m, yj_m, psij = self.X_all[j, 0], self.X_all[j, 1], self.X_all[j, 2]
-            dx_nmi = (xj_m - xk_m) / NMI
-            dy_nmi = (yj_m - yk_m) / NMI
-            dist_nmi = float(np.hypot(dx_nmi, dy_nmi))
+            dx_m = xj_m - xk_m
+            dy_m = yj_m - yk_m
 
-            # use relative bearing in obs space
-            bearing = float(np.arctan2(dy_nmi, dx_nmi))
-            bearing_rel = self._wrap_angle(bearing - psik)           # relative bearing of other ship j heading to ownship k heading
+            # Relative bearing from ownship k to other ship j
+            bearing = float(np.arctan2(dy_m, dx_m))
+            bearing_rel = self._wrap_angle(bearing - psik)
             sin_b, cos_b = np.sin(bearing_rel), np.cos(bearing_rel)
 
-            dcpa_m = float(self.pair_dcpa[k, j])
-            tcpa_s = float(self.pair_tcpa[k, j])
-            risk = float(self.pair_risk[k, j])
-
-            # normalize CPA features
-            dcpa_n = np.clip(dcpa_m / self.norm.dcpa_scale_m, -self.norm.clip, self.norm.clip)
-            tcpa_n = np.clip(tcpa_s / self.norm.tcpa_scale_s, -self.norm.clip, self.norm.clip)
-
-            # risk is in [0, 1] from base function, clip to [0, 1] and then map to [-1, 1] range like other normalized values for symmetry
-            risk01 = float(np.clip(risk, 0.0, 1.0))
-            risk_sym = 2.0 * risk01 - 1.0
-
             vec = np.array([
-                dx_nmi / self.norm.pos_scale_nmi, 
-                dy_nmi / self.norm.pos_scale_nmi, 
-                dist_nmi / self.norm.pos_scale_nmi,
+                dx_m,
+                dy_m,
                 sin_b,
-                cos_b, 
-                dcpa_n, 
-                tcpa_n, 
-                np.clip(risk_sym, -self.norm.clip, self.norm.clip),
-
+                cos_b,
             ], dtype=np.float32)
 
-            vec = np.clip(vec, -self.norm.clip, self.norm.clip)
             per_other.append(vec)
         
         obs = np.concatenate([own] + per_other, axis=0).astype(np.float32)
 
-        # safety: if NaNs appear, replace (possible if dynamics blow up )
-        obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32)
+        # Safety: if NaNs appear, replace with zero (shouldn't happen with continuous features)
+        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
         return obs
 
@@ -701,13 +683,19 @@ class MultiShipParallelEnv(ParallelEnv):
 
         # pairwise risk and DCPA across all agents pre-computed and cached for this step
         pair_dcpa = self.pair_dcpa
+        pair_tcpa = self.pair_tcpa
         pair_risk = self.pair_risk
         pair_dist = self.pair_dist
+
         
         LOA = self.LOA_own
         dcpa_safe = LOA * 4.0
-        goal_radius = 300.0
+        goal_radius = LOA * 2.0
 
+        # Agent-by-agent reward computation and metrics tracking
+        ## Once an agent reaches its final waypoint, we FREEZE its metrics.
+        ## This prevents spurious metric pollution from post-goal behavior (e.g., drift, loiter, etc.)
+        
         for k, agent in enumerate(self.agents):
             # waypoint following: reward along-track movement, penalize cross-track
             Xwpt_k = self.Xwpt_all[k]
@@ -715,53 +703,104 @@ class MultiShipParallelEnv(ParallelEnv):
             i_wpt_k = int(self.i_wpt_all[k])
 
             x_k, y_k = float(self.X_all[k, 0]), float(self.X_all[k, 1])
+            x_nmi, y_nmi = x_k / NMI, y_k / NMI
             wx_nmi, wy_nmi = float(Xwpt_k[i_wpt_k]), float(Ywpt_k[i_wpt_k])
             wx_m, wy_m = wx_nmi * NMI, wy_nmi * NMI
 
-            psi_des = float(np.arctan2(wy_m - y_k, wx_m - x_k))
-            t_hat = np.array([np.cos(psi_des), np.sin(psi_des)], dtype=float)
-            n_hat = np.array([-np.sin(psi_des), np.cos(psi_des)], dtype=float)
+            # Check if agent already reached goal - if so, skip metrics collection for this agent
+            agent_already_done = self.agent_reached_goal[agent]
 
-            dx_step = float(x_k - self.prev_X_all[k, 0])
-            dy_step = float(y_k - self.prev_X_all[k, 1])
-            dp = np.array([dx_step, dy_step], dtype=float)
-            step_dist = float(np.hypot(dx_step, dy_step))
-            self.episode_metrics[agent]["path_length_m"] += step_dist
+            if not agent_already_done:
+                psi_des = float(np.arctan2(wy_m - y_k, wx_m - x_k))
+                t_hat = np.array([np.cos(psi_des), np.sin(psi_des)], dtype=float)
+                n_hat = np.array([-np.sin(psi_des), np.cos(psi_des)], dtype=float)
 
-            along = float(dp @ t_hat)
-            cross = float(dp @ n_hat)
-
-            step_scale = max(1e-6, self.u_max * self.dt)
-            along_norm = float(np.clip(along / step_scale, -1.0, 1.0))
-            cross_norm = float(np.clip(cross / step_scale, -1.0, 1.0))
-
-            w_along = 1.0
-            w_cross = -0.2
-
-            r_along = w_along * along_norm
-            r_cross = w_cross * abs(cross_norm)
+                dx_step = float(x_k - self.prev_X_all[k, 0])
+                dy_step = float(y_k - self.prev_X_all[k, 1])
+                dp = np.array([dx_step, dy_step], dtype=float)
+                step_dist = float(np.hypot(dx_step, dy_step))
+                self.episode_metrics[agent]["path_length_m"] += step_dist
+                
+                # ========== OPTION 1: Delta Progress Reward (Waypoint-Based) ==========
+                # Reward based on progress towards goal (route completion), not just displacement
+                progress_m, route_len_m, _ = self.route_progress(k)
+                goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
+                
+                # Delta progress: how much closer to goal this step?
+                prev_progress = self.prev_goal_progress_all.get(agent, 0.0)
+                delta_progress = goal_progress - prev_progress
+                self.prev_goal_progress_all[agent] = goal_progress
+                
+                w_along = 1.0
+                r_along = w_along * delta_progress
+                
+                # ========== COMMENTED OUT: Old displacement-based reward ==========
+                # along = float(dp @ t_hat)
+                # cross = float(dp @ n_hat)
+                # step_scale = max(1e-6, self.u_max * self.dt)
+                # along_norm = float(np.clip(along / step_scale, -1.0, 1.0))
+                # cross_norm = float(np.clip(cross / step_scale, -1.0, 1.0))
+                # w_along = 1.0
+                # w_cross = -0.2
+                # r_along = w_along * along_norm
+                # r_cross = w_cross * abs(cross_norm)
+                
+                r_cross = 0.0  # Cross-track reward commented out for now
+            else:
+                # Agent already reached goal - no waypoint following reward
+                r_along = 0.0
+                r_cross = 0.0
 
             # risk penalty: discourage large collision risk with any other vessel
             agent_risks = pair_risk[k].copy()
             agent_risks[k] = 0.0 
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
-            self.episode_metrics[agent]["risk_exposure"] += max_risk * self.dt
 
             w_risk = -2.0
             r_risk = w_risk * max_risk
 
-            # DCPA penalty: normalized on scale of smallest safe DCPA (absoluate DCPA magnitude)
-            dcpa_vals = pair_dcpa[k]
-            dcpa_vals = dcpa_vals[np.isfinite(dcpa_vals)]
+            # only update metrics if agent hasn't reached goal yet
+            if not agent_already_done:
+                self.episode_metrics[agent]["risk_exposure"] += max_risk * self.dt
 
-            if dcpa_vals.size: 
-                min_dcpa_abs = float(np.min(np.abs(dcpa_vals)))
-            else: 
-                min_dcpa_abs = dcpa_safe
+            # DCPA penalty: normalized on scale of smallest safe DCPA
+            # Use absolute value (like visualization does) since projection-based CPA can be negative
+            # when ships diverge or are at exact CPA crossing. Only consider pairs in active encounter
+            # (current separation < 3 nmi) to avoid numerical artifacts from initialization.
+            dcpa_vals = pair_dcpa[k].copy()
+            dist_vals = pair_dist[k].copy()
+            
+            # Filter: exclude self-pair, finite values, within 3 nmi (active encounter range)
+            valid_idx = np.arange(len(dcpa_vals)) != k  # exclude self-pair
+            # Only consider pairs in active encounter: current separation between 0 and 3 nmi
+            in_encounter = (dist_vals > 0) & (dist_vals <= 3.0 * NMI)
+            valid = valid_idx & np.isfinite(dcpa_vals) & in_encounter
+            
+            if np.any(valid):
+                # Take absolute value (handles negative DCPA) and clip to 5 nmi
+                abs_dcpa = np.abs(dcpa_vals[valid])
+                min_dcpa_abs = float(np.min(abs_dcpa))
+                min_dcpa_abs = min(min_dcpa_abs, 5.0 * NMI)  # clip to 5 nmi = 9260m
+            else:
+                min_dcpa_abs = dcpa_safe  # use safe default
 
             dcpa_def = max(0.0, dcpa_safe - min_dcpa_abs)
-            self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa_abs)
+            if not agent_already_done:
+                self.episode_metrics[agent]["min_dcpa_m"] = min(self.episode_metrics[agent]["min_dcpa_m"], min_dcpa_abs)
+
+            # TCPA tracking: record minimum TCPA over episode (only future encounters, positive TCPA)
+            tcpa_vals = pair_tcpa[k]
+            tcpa_vals_finite = tcpa_vals[np.isfinite(tcpa_vals)]
+            tcpa_vals_positive = tcpa_vals_finite[tcpa_vals_finite > 0.0]  # Only future CPA (positive TCPA)
+            
+            if tcpa_vals_positive.size:
+                min_tcpa_abs = float(np.min(tcpa_vals_positive))
+            else:
+                min_tcpa_abs = float("inf")
+            
+            if not agent_already_done:
+                self.episode_metrics[agent]["min_tcpa_s"] = min(self.episode_metrics[agent]["min_tcpa_s"], min_tcpa_abs)
 
             # optional additional shaping or in place of risk penalty, but risk is more comprehensive 
             # r_dcpa = w_dcpa * (dcpa_def / dcpa_safe)
@@ -787,14 +826,16 @@ class MultiShipParallelEnv(ParallelEnv):
             collision = (min_dist < LOA) 
             infos[agent]["min_dist"] = min_dist
             
-            # track actual minimum separation (instantaneous)
-            self.episode_metrics[agent]["min_actual_sep_m"] = min(self.episode_metrics[agent]["min_actual_sep_m"], min_dist)
-            
-            # track near-miss: unsafe distance but not collision (1.5x LOA threshold)
-            near_miss_threshold = LOA * 1.5
-            if (min_dist >= LOA) and (min_dist < near_miss_threshold) and not collision:
-                if self.episode_metrics[agent]["near_miss"] == 0:
-                    self.episode_metrics[agent]["near_miss"] = 1
+            # only update metrics if agent hasn't reached goal yet
+            if not agent_already_done:
+                # track actual minimum separation (instantaneous)
+                self.episode_metrics[agent]["min_actual_sep_m"] = min(self.episode_metrics[agent]["min_actual_sep_m"], min_dist)
+                
+                # track near-miss: unsafe distance but not collision (1.5x LOA threshold)
+                near_miss_threshold = LOA * 1.5
+                if (min_dist >= LOA) and (min_dist < near_miss_threshold) and not collision:
+                    if self.episode_metrics[agent]["near_miss"] == 0:
+                        self.episode_metrics[agent]["near_miss"] = 1
 
             w_collision = -10.0
 
@@ -806,41 +847,53 @@ class MultiShipParallelEnv(ParallelEnv):
                 else: 
                     total = total 
                 self.episode_metrics[agent]["collision"] = 1
-                # terminations[agent] = True
-                # infos[agent]["collision"] = True
 
-            # success: reached final wp and within radius OR made sufficient route progress
+            # success: reached final wp and within radius 
             dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
             progress_m, route_len_m, _ = self.route_progress(k)
             goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
-            self.episode_metrics[agent]["goal_progress"] = max(self.episode_metrics[agent]["goal_progress"], goal_progress)
             
-            # success if: reached final waypoint only
-            # (progress tracked separately but doesn't count as success)
-            final_reached = (i_wpt_k >= len(Xwpt_k) - 1) and (dist_to_wp <= goal_radius)
+            # update goal progress only if agent hasn't reached goal yet
+            if not agent_already_done:
+                self.episode_metrics[agent]["goal_progress"] = max(self.episode_metrics[agent]["goal_progress"], goal_progress)
+            
+            # success if: reached final waypoint using waypoint_selection() built-in threshold (~200m from CORALL planning.py)
+            final_waypoint_reached_by_index = (i_wpt_k >= len(Xwpt_k) - 1)
+            
+            if final_waypoint_reached_by_index and len(Xwpt_k) > 1:
+                # Verify agent is actually close to the final waypoint
+                xf_nmi = float(Xwpt_k[-1])
+                yf_nmi = float(Ywpt_k[-1])
+                dist_to_goal_nmi = np.hypot(xf_nmi - x_nmi, yf_nmi - y_nmi)
+                final_reached = (dist_to_goal_nmi < 200.0 / 1852.0)  # ~200m acceptance radius (from CORALL)
+            else:
+                final_reached = final_waypoint_reached_by_index
 
-            w_success = 40.0
+            w_success = 20.0
 
             if final_reached:
-                # Track agent success in infos, don't mark as done
-                # RLlib's old API needs uniform done flags for all agents
+                # Track agent success in infos
                 infos[agent]["success"] = True
-                total += w_success                
+                # total += w_success                
                 self.episode_metrics[agent]["success"] = 1
                 self.episode_metrics[agent]["goal_passed"] = 1
+                
+                # Mark agent as reached goal - stop collecting metrics for this agent
+                self.agent_reached_goal[agent] = True
 
                 if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
                     self.episode_metrics[agent]["completion_time_s"] = self.t
+                
+                # Mark agent as truncated (agent-level done) when reaching goal
+                # Note: Use truncations, NOT terminations - terminations end the global episode for all agents
+                # which breaks RLlib's trajectory handling in multi-agent environments
+                truncations[agent] = True
             else:
                 infos[agent]["success"] = False
 
             rewards[agent] = float(total)
 
-        # NOTE: Episode only ends at global time limit
-        # All agents continue running together until sim_time is exceeded
-        # Individual agent completions tracked via infos["success"]
-        
-        
+        # Note: Episode only ends at global simulation time limit and all agents continue running together until sim_time is exceeded
         return rewards, terminations, truncations, infos 
 
 
