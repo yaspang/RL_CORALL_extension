@@ -2,7 +2,7 @@
 Evaluate a trained policy for a trained shared-policy PPO model using CORALL Imazu case on the MultiShipParallelEnv environment.
 
 Usage example:
-python -m maritime_rl_pkg.maritime_rl.evaluate_trained_policy ^
+python -m maritime_rl_pkg.evaluate_trained_policy ^
     --checkpoint "C:/path/to/checkpoint_dir/checkpoint_000200" ^
     --case 2 ^
     --episodes 50 ^
@@ -49,7 +49,7 @@ def build_algo_and_env(args):
     from ray import tune
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
-    from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
+    from maritime_rl_pkg.env_multi_agent_ppo import MultiShipParallelEnv
 
     def env_creator(config):
         return MultiShipParallelEnv(

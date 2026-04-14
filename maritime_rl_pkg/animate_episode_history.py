@@ -1,9 +1,13 @@
 """
 Animate episode history from eval_trained_policy_with_hist.py output.
+
+Instatiate with:
+python -m maritime_rl_pkg.animate_episode_history ^
+  --history "C:\path\to\policy_eval_case8_...\seed_0\episode_histories\trained_case8_seed0_ep000.json.npz" ^
+  --output "C:\path\to\policy_eval_case8_...\seed_0\episode_replay.gif"
+
 """
-#python -m maritime_rl_pkg.maritime_rl.animate_episode_history ^
-  #--history "C:\path\to\policy_eval_case8_...\seed_0\episode_histories\trained_case8_seed0_ep000.json.npz" ^
-  #--output "C:\path\to\policy_eval_case8_...\seed_0\episode_replay.gif"
+
 
 
 from __future__ import annotations

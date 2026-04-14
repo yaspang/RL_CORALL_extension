@@ -1,3 +1,11 @@
+
+"""
+Creates a CORALLComparisonEnv that directly compares CORALL's scripted guidance and traffic propagation against an RL-controlled ownship, while keeping the same observation space 
+and evaluation metrics for compatibility to compare against RL ownship results.
+
+- CORALL-controlled ownship (ship_0) with internal guidance and dynamics propagation
+
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass

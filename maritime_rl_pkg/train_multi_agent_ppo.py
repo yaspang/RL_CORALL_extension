@@ -6,12 +6,12 @@ Notes:
 - supports PettingZoo ParallelEnv via PettingZooEnv wrapper
 
 Example usage:
-python -m maritime_rl_pkg.maritime_rl.multi_agent_train_ppo --case 2 --iters 50 --num_workers 1 --rollout_frag 1000 --train_batch 4000 --seed 0
+python -m maritime_rl_pkg.multi_agent_train_ppo --case 2 --iters 50 --num_workers 1 --rollout_frag 1000 --train_batch 4000 --seed 0
 
 Example with different MLP sizes:
-python -m maritime_rl_pkg.maritime_rl.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 64 64 --seed 0
-python -m maritime_rl_pkg.maritime_rl.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 128 128 --seed 0
-python -m maritime_rl_pkg.maritime_rl.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 256 256 --seed 0
+python -m maritime_rl_pkg.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 64 64 --seed 0
+python -m maritime_rl_pkg.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 128 128 --seed 0
+python -m maritime_rl_pkg.multi_agent_train_ppo --case 6 --iters 40 --mlp_hiddens 256 256 --seed 0
 
 """
 
@@ -187,7 +187,7 @@ def main():
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.algorithms.ppo import PPO
 
-    from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
+    from maritime_rl_pkg.env_multi_agent_ppo import MultiShipParallelEnv
 
     # explicitly initialize Ray to avoid hangs on Windows
     if not ray.is_initialized():
@@ -444,7 +444,7 @@ def main():
         print(f"\n[INFO] Best checkpoint was at iteration {best_checkpoint_data['iteration']}")
         print(f"       with eval_return_mean = {best_checkpoint_data['eval_return_mean']:.2f}")
         print(f"\n[INFO] Ready to evaluate:")
-        print(f"       python -m maritime_rl_pkg.maritime_rl.eval_trained_policy \\")
+        print(f"       python -m maritime_rl_pkg.eval_trained_policy \\")
         print(f"           --checkpoint \"{best_checkpoint_folder.resolve()}\" \\")
         print(f"           --case {args.case} --episodes 40 --seed {args.seed}")
     else:

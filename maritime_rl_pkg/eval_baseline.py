@@ -1,3 +1,8 @@
+"""
+Evaluates rule-based baseline (CORALL reactive avoidance + waypoint planning) in the same environment and metrics as the trained RL policy evaluation for direct comparison.
+against a trained RL policy in the same environment and using the same evaluation metrics.
+"""
+
 import argparse
 import json
 import csv
@@ -25,7 +30,7 @@ def safe_mean(values):
     return float(np.mean(vals)) if len(vals) > 0 else float('nan')
 
 def build_env_creator(args):
-    from maritime_rl_pkg.maritime_rl.CORALL_comparison_env import CORALLComparisonEnv
+    from maritime_rl_pkg.env_baseline import CORALLComparisonEnv
 
     def env_creator(config):
         return CORALLComparisonEnv(
