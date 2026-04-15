@@ -56,19 +56,23 @@ def parse_args():
     p.add_argument("--eval_every", type=int, default=10)
     p.add_argument("--n_eval_episodes", type=int, default=3, help="Number of evaluation episodes to run at each evaluation checkpoint")
     p.add_argument("--ckpt_every", type=int, default=25, help="How often (in training iterations) to save checkpoints")
-    p.add_argument("--mlp_hiddens", type=int, nargs="+", default=[128, 128], help="MLP hidden layer sizes (e.g., --mlp_hiddens 128 128 or --mlp_hiddens 64 64)")
+    p.add_argument("--mlp_hiddens", type=int, nargs="+", default=[64, 64], help="MLP hidden layer sizes (default 64,64 to reduce overfitting; try 128,128 for more capacity)")
     return p.parse_args()
 
-def run_policy_evaluation(algo, env_creator, n_eval_episodes=5):
+def run_policy_evaluation(algo, env_creator, n_eval_episodes=5, use_stochastic=False):
     """
-    Run deterministic evaluation rollouts with current PPO policy during training
+    Run evaluation rollouts with current PPO policy during training.
+    If use_stochastic=False (default), uses deterministic argmax actions.
+    If use_stochastic=True, samples from action distribution for better generalization testing.
     Returns average episode-level metrics 
     """
     eval_returns = []
     eval_lengths = []
 
     for ep in range(n_eval_episodes):
-        env = env_creator({})
+        # Use different seeds for eval episodes to test generalization
+        eval_seed = 10000 + ep  # Deterministic but different from training seed (0)
+        env = env_creator({"seed": eval_seed})
         obs, infos = env.reset()
 
         ep_return_by_agent = {agent: 0.0 for agent in env.agents}
@@ -112,12 +116,23 @@ def run_policy_evaluation(algo, env_creator, n_eval_episodes=5):
                             offset = 0
                             for num_categories in action_space_shape:
                                 component_logits = logits[offset:offset + num_categories]
-                                action.append(int(np.argmax(component_logits)))
+                                if use_stochastic:
+                                    # Sample from distribution (tests generalization better)
+                                    probs = np.exp(component_logits) / np.sum(np.exp(component_logits))
+                                    action_component = np.random.choice(num_categories, p=probs)
+                                else:
+                                    # Deterministic argmax (best current policy)
+                                    action_component = int(np.argmax(component_logits))
+                                action.append(action_component)
                                 offset += num_categories
                             action = np.array(action, dtype=np.int64)
                         else:
                             # Single discrete action
-                            action = np.array([int(np.argmax(logits))], dtype=np.int64)
+                            if use_stochastic:
+                                probs = np.exp(logits) / np.sum(np.exp(logits))
+                                action = np.array([np.random.choice(len(logits), p=probs)], dtype=np.int64)
+                            else:
+                                action = np.array([int(np.argmax(logits))], dtype=np.int64)
                     elif isinstance(output, dict):
                         print(f"[DEBUG] Unexpected output format. Keys: {list(output.keys())}")
                         raise KeyError(f"Cannot extract action from output keys: {list(output.keys())}")
@@ -276,7 +291,7 @@ def main():
             train_batch_size=args.train_batch,
             clip_param=0.2, 
             vf_clip_param=10.0,
-            entropy_coeff=0.0,
+            entropy_coeff=0.005,  # INCREASED from 0.0: Prevent collapse to deterministic policy, improve generalization
             lambda_=0.95, 
             num_epochs=10,
             minibatch_size=128,
@@ -359,10 +374,12 @@ def main():
         if (i+1) % args.eval_every == 0:
             try:
                 eval_t0 = time.perf_counter()
+                # Run deterministic eval (best current policy)
                 eval_results = run_policy_evaluation(
                     algo, 
                     env_creator, 
-                    n_eval_episodes=args.n_eval_episodes
+                    n_eval_episodes=max(10, args.n_eval_episodes),  # At least 10 episodes for better stats
+                    use_stochastic=False
                 )
                 eval_wall_time_s = time.perf_counter() - eval_t0
                 eval_return_mean = eval_results["eval_return_mean"]

@@ -94,7 +94,9 @@ def animate_history(
         for j in range(1, n_agents):
             xj = X_all[i0:s + 1, j, 0] / NMI
             yj = X_all[i0:s + 1, j, 1] / NMI
-            line, = ax.plot(xj, yj, color="tab:blue", linewidth=1.8, alpha=0.8)
+            # Use dotted line for target ship trails (like CORALL)
+            line, = ax.plot(xj, yj, color="tab:blue", linewidth=2.0, alpha=0.7, 
+                           linestyle=':', label="Target ship trail" if j == 1 else "")
             artists.append(line)
 
             x_now = X_all[s, j, 0] / NMI
@@ -117,10 +119,12 @@ def animate_history(
                 else:
                     artists.append(ship_artists)
 
-        # ownship trail
+        # ownship trail with dashed line for contrast
         xo = X_all[i0:s + 1, own_idx, 0] / NMI
         yo = X_all[i0:s + 1, own_idx, 1] / NMI
-        line, = ax.plot(xo, yo, color="purple", linewidth=2.4, alpha=0.95, label="RL ownship")
+        # Use dashed line for ownship trail
+        line, = ax.plot(xo, yo, color="purple", linewidth=2.8, alpha=0.85, 
+                       linestyle='--', label="RL ownship trail")
         artists.append(line)
 
         x_now = X_all[s, own_idx, 0] / NMI

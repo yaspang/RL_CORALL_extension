@@ -149,20 +149,24 @@ class MultiShipParallelEnv(ParallelEnv):
         # Observation Spaces: same for all n_agents
         # Own state: [x, y, sin(psi), cos(psi), r, u, b]
         own_dim = 7
-        # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel)]
-        per_other_dim = 4
-        obs_dim = own_dim + (self.n_agents - 1) * per_other_dim
+        # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel), du_rel]
+        per_other_dim = 5
+        # Updated: now including waypoint features [dist_norm, sin_bearing, cos_bearing, progress]
+        waypoint_dim = 4
+        obs_dim = own_dim + waypoint_dim + (self.n_agents - 1) * per_other_dim
         
         # Bounds for observation space
+        # Structure: [own (7) + waypoint (4) + per_other (5 each)]
         low_bounds = np.array(
-            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, 0.0, -self.norm.b_max] +
-            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0] * (self.n_agents - 1),
+            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, 0.0, -self.norm.b_max] +  # own (7)
+            [0.0, -1.0, -1.0, 0.0] +  # waypoint: [dist_norm, sin_bearing, cos_bearing, progress] (4)
+            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.u_max] * (self.n_agents - 1),  # per_other (5 each)
             dtype=np.float32
         )
         high_bounds = np.array(
-            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.u_max, self.norm.b_max] +
-            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0] * (self.n_agents - 1),
-            dtype=np.float32
+            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.u_max, self.norm.b_max] +  # own (7)
+            [1.0, 1.0, 1.0, 1.0] +  # waypoint: [dist_norm, sin_bearing, cos_bearing, progress] (4)
+            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.u_max] * (self.n_agents - 1),  # per_other (5 each)
         )
         self._obs_space = {
             agent: spaces.Box(low=low_bounds, high=high_bounds, dtype=np.float32) for agent in self.agents
@@ -250,13 +254,61 @@ class MultiShipParallelEnv(ParallelEnv):
             u0 = float(np.clip(0.5 * (self.u_min + self.u_max), self.u_min, self.u_max))
         
         self.u_des_all[0] = u0
-        X_all[0, :] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, u0], dtype=float)
+        
+        # Use uniform nominal speed for all agents to ensure realistic collision scenarios
+        # In Imazu cases, many targets have very high speeds (10-15 m/s) which prevents encounters
+        # Standardize to moderate speed (~9.5 m/s ≈ 18.4 knots) for better convergence
+        uniform_nominal_speed = 9.5  # m/s - moderate maritime speed
+        
+        # Recompute ownship speed to be consistent
+        u0 = float(np.clip(uniform_nominal_speed, self.u_min, self.u_max))
+        self.u_des_all[0] = u0
+        
+        # Compute ownship heading: point toward first obstacle (target ship) for meaningful encounters
+        # If no obstacles, use default heading of 0 rad
+        if self.n_obstacles > 0:
+            # Heading from origin (0,0) to first target ship
+            psi0 = float(np.arctan2(Yob[0], Xob[0]))
+        else:
+            psi0 = 0.0
+        
+        # Store raw heading angle (radians) - will convert to sin/cos only in observations
+        # This ensures vessel_dynamics receives correct heading values
+        X_all[0, :] = np.array([0.0, 0.0, psi0, 0.0, 0.0, u0], dtype=float)
 
-        # Target ship initial states
+        # Target ship initial states - use uniform speed for consistent dynamics
+        # NOTE: Use EXACT Imazu geometry (no scaling) for authenticity
+        # Ownship always at origin; targets at original Imazu positions
+        # Collision encounters created by extending route_len_nmi (not by scaling distances)
+        scenario_scale = 1.0  # Use unscaled Imazu geometry for accurate relative positions
+        
         for j in range(self.n_obstacles):
-            u_j = float(np.clip(Vob[j], self.u_min, self.u_max))
+            # Use same uniform speed as ownship for scenario consistency
+            u_j = float(np.clip(uniform_nominal_speed, self.u_min, self.u_max))
             self.u_des_all[j + 1] = u_j
-            X_all[j + 1, :] = np.array([Xob[j], Yob[j], psiob[j], 0.0, 0.0, u_j], dtype=float)
+            # Scale target positions to bring them closer (collision avoidance test)
+            # IMPORTANT: Xob/Yob from Imazu are in METERS, scale DIRECTLY in meters
+            # (don't convert to nmi first or we'll store nmi values in X_all which expects meters!)
+            # Only scale target positions, NOT ownship (ownship stays at 0,0)
+            
+            # MODIFIED: Make targets head toward ownship to create realistic 3-ship convergence
+            # This creates collision avoidance scenarios from all directions
+            target_x = Xob[j] * scenario_scale
+            target_y = Yob[j] * scenario_scale
+            # Heading from target toward ownship at (0, 0)
+            # In nav coords: dy = 0 - target_y, dx = 0 - target_x
+            psi_j = float(np.arctan2(-target_y, -target_x))
+            
+            # Store raw heading angle (radians) - will convert to sin/cos only in observations
+            # This ensures vessel_dynamics receives correct heading values
+            X_all[j + 1, :] = np.array([
+                Xob[j] * scenario_scale,           # Scale target positions in METERS (ownship unscaled at 0,0)
+                Yob[j] * scenario_scale, 
+                psi_j,                             # Raw heading angle (rad) - NOT sin/cos!
+                0.0, 
+                0.0, 
+                u_j
+            ], dtype=float)
 
         return X_all
 
@@ -280,7 +332,9 @@ class MultiShipParallelEnv(ParallelEnv):
         for k in range(self.n_agents):
             x_m = float(X_all[k, 0])
             y_m = float(X_all[k, 1])
-            psi = float(X_all[k, 2])
+        for k in range(self.n_agents):
+            x_m, y_m = float(X_all[k, 0]), float(X_all[k, 1])
+            psi = float(X_all[k, 2])  # Raw heading angle (rad) - no need to recover from sin/cos
 
             x0_nmi = x_m / NMI
             y0_nmi = y_m / NMI
@@ -308,7 +362,9 @@ class MultiShipParallelEnv(ParallelEnv):
             Ywpt_k = self.Ywpt_all[k]
 
             if len(Xwpt_k) <= 1:
-                self.psi_route_ref_all[k] = float(self.X_all[k, 2])   # if no waypoints or only 1 waypoint, use current heading as route reference
+                # Read raw heading directly (no need to recover from sin/cos)
+                psi_k = float(self.X_all[k, 2])
+                self.psi_route_ref_all[k] = psi_k
                 continue
                 
             i_wpt_k = min(i_wpt_k, len(Xwpt_k) - 1)   # safety check
@@ -321,7 +377,9 @@ class MultiShipParallelEnv(ParallelEnv):
             dy_m = (y_next_nmi - y_prev_nmi) * NMI
 
             if abs(dx_m) < 1e-12 and abs(dy_m) < 1e-12: 
-                self.psi_route_ref_all[k] = float(self.X_all[k, 2])   # if waypoints are effectively the same point, use current heading as route reference
+                # Read raw heading directly (no need to recover from sin/cos)
+                psi_k = float(self.X_all[k, 2])
+                self.psi_route_ref_all[k] = psi_k
             else: 
                 self.psi_route_ref_all[k] = float(np.arctan2(dy_m, dx_m))
 
@@ -345,13 +403,15 @@ class MultiShipParallelEnv(ParallelEnv):
         # Narrow-phase: compute CPA for all checked pairs
         for a, b in pairs_to_check:
             xa, ya = float(self.X_all[a, 0]), float(self.X_all[a, 1])
-            psi_a, u_a = float(self.X_all[a, 2]), float(self.X_all[a, 5])
+            psi_a = float(self.X_all[a, 2])  # Raw heading angle (rad)
+            u_a = float(self.X_all[a, 5])
             # Use current heading + speed for velocity estimate (more responsive to control inputs)
             vxa = u_a * np.cos(psi_a)
             vya = u_a * np.sin(psi_a)
 
             xb, yb = float(self.X_all[b, 0]), float(self.X_all[b, 1])
-            psi_b, u_b = float(self.X_all[b, 2]), float(self.X_all[b, 5])
+            psi_b = float(self.X_all[b, 2])  # Raw heading angle (rad)
+            u_b = float(self.X_all[b, 5])
             # Use current heading + speed for velocity estimate
             vxb = u_b * np.cos(psi_b)
             vyb = u_b * np.sin(psi_b)
@@ -501,7 +561,7 @@ class MultiShipParallelEnv(ParallelEnv):
             Ywpt_k = self.Ywpt_all[k]
             i_wpt_k = int(self.i_wpt_all[k])
 
-            x_m, y_m, psi_k, r_k, b_k, u_k = self.X_all[k, :]
+            x_m, y_m, psi_k, _, _, u_k = self.X_all[k, :]  # State format: [x, y, psi, 0, 0, u]
             x_nmi, y_nmi = x_m / NMI, y_m / NMI
 
             i_wpt_k = waypoint_selection(Xwpt_k, Ywpt_k, x_nmi, y_nmi, i_wpt_k)
@@ -517,7 +577,8 @@ class MultiShipParallelEnv(ParallelEnv):
         
         # 2) advance dynamics for each ship 
         for k in range(self.n_agents):
-            x_m, y_m, psi_k, r_k, b_k, u_k = self.X_all[k, :]
+            x_m, y_m, psi_k, r_k, _, u_k = self.X_all[k, :]  # State format: [x, y, psi, 0, 0, u]
+            b_k = 0.0
 
             ui_psi1_k = float(self.ui_psi1_all[k])
             tau_c, v_c, ui_psi1_k = controller(
@@ -548,10 +609,10 @@ class MultiShipParallelEnv(ParallelEnv):
                 truncations[agent] = True
             self.done = True
 
-        # if episode ends, attach final episode metrics to infos for logging and evaluation
-        if self.done:
-            for agent in self.agents:
-                infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
+        # ALWAYS attach episode metrics to infos for logging and evaluation
+        # (not just when self.done, since individual agents may be truncated earlier)
+        for agent in self.agents:
+            infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
 
         # IMPORTANT: Handle observations for new API stack RLlib
         # RLlib needs ONE final observation for agents being truncated (for value function bootstrapping)
@@ -591,13 +652,23 @@ class MultiShipParallelEnv(ParallelEnv):
         return (angle + np.pi) % (2 * np.pi) - np.pi
     
     def own_state_features(self, k: int) -> np.ndarray:
-        x_m, y_m, psi, r, b, u = self.X_all[k, :]
+        """Return own state features for agent k as [x, y, sin(psi), cos(psi), r, u, b]"""
+        x_m = float(self.X_all[k, 0])
+        y_m = float(self.X_all[k, 1])
+        psi_k = float(self.X_all[k, 2])  # Raw heading angle (rad)
+        r = float(self.X_all[k, 4])
+        u = float(self.X_all[k, 5])
+        b = 0.0  # Heading change rate (not used in this version)
+    
+        # Convert to sin/cos for observation
+        sin_psi = float(np.sin(psi_k))
+        cos_psi = float(np.cos(psi_k))
     
         feats = np.array([
             x_m,
             y_m, 
-            np.sin(psi), 
-            np.cos(psi), 
+            sin_psi,
+            cos_psi,
             r,
             u,
             b,
@@ -608,32 +679,80 @@ class MultiShipParallelEnv(ParallelEnv):
     
     def get_observation(self, k: int) -> np.ndarray:
         own = self.own_state_features(k)
-        xk_m, yk_m, psik = self.X_all[k, 0], self.X_all[k, 1], self.X_all[k, 2]
+        xk_m = self.X_all[k, 0]
+        yk_m = self.X_all[k, 1]
+        psi_k = float(self.X_all[k, 2])  # Raw heading angle (rad)
+        uk = self.X_all[k, 5]
+
+        # ADDED: Waypoint information for goal-seeking behavior
+        # Current waypoint (goal for this leg of route)
+        Xwpt_k = self.Xwpt_all[k]
+        Ywpt_k = self.Ywpt_all[k]
+        i_wpt_k = int(self.i_wpt_all[k])
+        
+        # Current goal waypoint in meters
+        if i_wpt_k < len(Xwpt_k):
+            wxpt_m = float(Xwpt_k[i_wpt_k]) * NMI
+            wypt_m = float(Ywpt_k[i_wpt_k]) * NMI
+        else:
+            # Final waypoint already reached, use last waypoint
+            wxpt_m = float(Xwpt_k[-1]) * NMI
+            wypt_m = float(Ywpt_k[-1]) * NMI
+        
+        # Vector from agent to goal
+        dx_goal_m = wxpt_m - xk_m
+        dy_goal_m = wypt_m - yk_m
+        dist_to_goal_m = float(np.hypot(dx_goal_m, dy_goal_m))
+        
+        # Bearing from agent to goal
+        bearing_to_goal = float(np.arctan2(dy_goal_m, dx_goal_m))
+        bearing_to_goal_rel = self._wrap_angle(bearing_to_goal - psi_k)
+        sin_b_goal = float(np.sin(bearing_to_goal_rel))
+        cos_b_goal = float(np.cos(bearing_to_goal_rel))
+        
+        # Goal progress (normalized 0 to 1)
+        progress_m, route_len_m, _ = self.route_progress(k)
+        goal_progress_norm = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
+        
+        # Waypoint features: [distance_normalized, sin(bearing_to_goal), cos(bearing_to_goal), progress]
+        waypoint_features = np.array([
+            dist_to_goal_m / max(1.0, 5.0 * NMI),  # normalize by ~5 nmi scale
+            sin_b_goal,
+            cos_b_goal,
+            goal_progress_norm,
+        ], dtype=np.float32)
 
         per_other = []
         for j in range(self.n_agents):
             if j == k:
                 continue
             
-            xj_m, yj_m, psij = self.X_all[j, 0], self.X_all[j, 1], self.X_all[j, 2]
+            xj_m = self.X_all[j, 0]
+            yj_m = self.X_all[j, 1]
+            psi_j = float(self.X_all[j, 2])  # Raw heading angle (rad)
+            uj = self.X_all[j, 5]
             dx_m = xj_m - xk_m
             dy_m = yj_m - yk_m
 
             # Relative bearing from ownship k to other ship j
             bearing = float(np.arctan2(dy_m, dx_m))
-            bearing_rel = self._wrap_angle(bearing - psik)
+            bearing_rel = self._wrap_angle(bearing - psi_k)
             sin_b, cos_b = np.sin(bearing_rel), np.cos(bearing_rel)
+            
+            # Relative speed: speed of agent j relative to agent k
+            du_rel = float(uj - uk)
 
             vec = np.array([
                 dx_m,
                 dy_m,
                 sin_b,
                 cos_b,
+                du_rel,
             ], dtype=np.float32)
 
             per_other.append(vec)
         
-        obs = np.concatenate([own] + per_other, axis=0).astype(np.float32)
+        obs = np.concatenate([own, waypoint_features] + per_other, axis=0).astype(np.float32)
 
         # Safety: if NaNs appear, replace with zero (shouldn't happen with continuous features)
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
@@ -721,7 +840,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 step_dist = float(np.hypot(dx_step, dy_step))
                 self.episode_metrics[agent]["path_length_m"] += step_dist
                 
-                # ========== OPTION 1: Delta Progress Reward (Waypoint-Based) ==========
+                # ========== updated: Delta Progress Reward (Waypoint-Based) ==========
                 # Reward based on progress towards goal (route completion), not just displacement
                 progress_m, route_len_m, _ = self.route_progress(k)
                 goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
@@ -731,21 +850,25 @@ class MultiShipParallelEnv(ParallelEnv):
                 delta_progress = goal_progress - prev_progress
                 self.prev_goal_progress_all[agent] = goal_progress
                 
-                w_along = 1.0
+                # Scale progress reward: multiply by route length and normalize by step scale
+                # This rescales tiny delta_progress (e.g., 1e-4 when route is 20 nmi) to comparable magnitude with step-based rewards
+                w_along = max(route_len_m, 1.0) / (self.u_max * self.dt * 100.0)  # normalize by expected step distance
+                # MODERATE boost waypoint reward: 5x to balance goal-seeking with safety
+                # 15x was too aggressive (failed), 2x was too weak (got stuck at 93%)
+                w_along = 5.0  # 5x boost - middle ground balancing goal and collision avoidance
                 r_along = w_along * delta_progress
                 
                 # ========== COMMENTED OUT: Old displacement-based reward ==========
-                # along = float(dp @ t_hat)
-                # cross = float(dp @ n_hat)
-                # step_scale = max(1e-6, self.u_max * self.dt)
-                # along_norm = float(np.clip(along / step_scale, -1.0, 1.0))
-                # cross_norm = float(np.clip(cross / step_scale, -1.0, 1.0))
+                #along = float(dp @ t_hat)
+                #cross = float(dp @ n_hat)
+                #step_scale = max(1e-6, self.u_max * self.dt)
+                #along_norm = float(np.clip(along / step_scale, -1.0, 1.0))
+                #cross_norm = float(np.clip(cross / step_scale, -1.0, 1.0))
                 # w_along = 1.0
-                # w_cross = -0.2
+                #w_cross = -0.2
                 # r_along = w_along * along_norm
-                # r_cross = w_cross * abs(cross_norm)
+                #r_cross = w_cross * abs(cross_norm)
                 
-                r_cross = 0.0  # Cross-track reward commented out for now
             else:
                 # Agent already reached goal - no waypoint following reward
                 r_along = 0.0
@@ -757,7 +880,11 @@ class MultiShipParallelEnv(ParallelEnv):
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
 
-            w_risk = -2.0
+            # MINIMAL WEIGHT: Risk penalty now secondary. Per-step accumulation was overwhelming waypoint reward.
+            # -0.2/step * 900 steps = -180 baseline. Now waypoint dominates.
+            w_risk = -0.2 # Light risk penalty: let waypoint reward dominate
+            # Accumulates to ~-270 over 900 steps, balanced against 5.0x waypoint (~+50)
+            # Policy now incentivized to reach goals while maintaining safety
             r_risk = w_risk * max_risk
 
             # only update metrics if agent hasn't reached goal yet
@@ -773,8 +900,8 @@ class MultiShipParallelEnv(ParallelEnv):
             
             # Filter: exclude self-pair, finite values, within 3 nmi (active encounter range)
             valid_idx = np.arange(len(dcpa_vals)) != k  # exclude self-pair
-            # Only consider pairs in active encounter: current separation between 0 and 3 nmi
-            in_encounter = (dist_vals > 0) & (dist_vals <= 3.0 * NMI)
+            # Only consider pairs in active encounter: current separation between 0 and 6 nmi
+            in_encounter = (dist_vals > 0) & (dist_vals <= 6.0 * NMI)
             valid = valid_idx & np.isfinite(dcpa_vals) & in_encounter
             
             if np.any(valid):
@@ -818,7 +945,10 @@ class MultiShipParallelEnv(ParallelEnv):
             infos[agent]["t"] = self.t
 
             #total = r_along + r_cross + r_risk + r_dcpa + r_speed + r_time
-            total = r_along + r_cross + r_risk
+            total = r_along + r_risk 
+            
+            # DEBUG: Track reward component breakdown
+            r_collision = 0.0
 
             # collision penalty
             finite_d = np.isfinite(pair_dist[k])
@@ -837,16 +967,29 @@ class MultiShipParallelEnv(ParallelEnv):
                     if self.episode_metrics[agent]["near_miss"] == 0:
                         self.episode_metrics[agent]["near_miss"] = 1
 
-            w_collision = -10.0
+            w_collision = -12.0  # Collision is severe cost-free pass, only when actually colliding (not per-step)
 
             # only apply the collision penalty at the moment of collision, not every step after
             ## scale by risk and speed to encourage risk mitigation and slowing down in high-risk situations (instead of just a flat penalty every step within collision distance)
             if collision: 
                 if self.episode_metrics[agent]["collision"] == 0:
-                    total += w_collision * (1.0 + max_risk + u_k / max(1.0, u_des))
+                    r_collision = w_collision * (1.0 + max_risk + u_k / max(1.0, u_des))
+                    total += r_collision
                 else: 
                     total = total 
                 self.episode_metrics[agent]["collision"] = 1
+            
+            # DEBUG: Store reward breakdown for analysis
+            if not hasattr(self, 'episode_rewards_breakdown'):
+                self.episode_rewards_breakdown = {agent: [] for agent in self.agents}
+            self.episode_rewards_breakdown[agent].append({
+                "r_waypoint": r_along,
+                "r_risk": r_risk,
+                "r_collision": r_collision,
+                "total": total,
+                "collision_occurred": collision,
+                "min_dist": min_dist,
+            })
 
             # success: reached final wp and within radius 
             dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
@@ -869,12 +1012,13 @@ class MultiShipParallelEnv(ParallelEnv):
             else:
                 final_reached = final_waypoint_reached_by_index
 
-            w_success = 20.0
+            w_success = 20.0  # Increase from 15.0 to 20.0 for completion incentive
+            # Not as extreme as 25.0 to avoid overweighting terminal reward
 
             if final_reached:
                 # Track agent success in infos
                 infos[agent]["success"] = True
-                # total += w_success                
+                total += w_success                
                 self.episode_metrics[agent]["success"] = 1
                 self.episode_metrics[agent]["goal_passed"] = 1
                 

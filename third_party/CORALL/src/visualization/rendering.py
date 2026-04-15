@@ -37,11 +37,14 @@ def animate_ship(x, y, psi, loa, bol, cpa, color, ax):
     y_fn = y + 2 * L3 * np.sin(psi)
 
     # Vertices for the polygon
-    vertices = 4*np.array([[x_ar, y_ar], [x_fr, y_fr], [x_fn, y_fn], [x_fl, y_fl], [x_al, y_al]])
+    vertices = np.array([[x_ar, y_ar], [x_fr, y_fr], [x_fn, y_fn], [x_fl, y_fl], [x_al, y_al]])
     
     ship_polygon = Polygon(vertices, closed=True, edgecolor='black', facecolor=color, zorder=2)
 
     ax.add_patch(ship_polygon)  # Add polygon to plot
+    
+    # Return the artist for animation compatibility
+    return ship_polygon
     
     #plt.show(block=True) 
 

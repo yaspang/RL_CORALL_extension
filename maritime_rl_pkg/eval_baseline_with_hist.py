@@ -29,7 +29,7 @@ def safe_mean(values):
 
 
 def build_env_creator(args):
-    from maritime_rl_pkg.maritime_rl.CORALL_comparison_env import CORALLComparisonEnv
+    from maritime_rl_pkg.env_baseline import CORALLComparisonEnv
 
     def env_creator(config):
         return CORALLComparisonEnv(

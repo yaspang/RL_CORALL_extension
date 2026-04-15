@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch
 import ray
 
 def parse_args():
@@ -73,7 +74,7 @@ def build_algo_and_env(args):
     from ray.rllib.algorithms.ppo import PPOConfig
     from ray.rllib.env.wrappers.pettingzoo_env import ParallelPettingZooEnv
     
-    from maritime_rl_pkg.maritime_rl.multi_agent_env_ppo import MultiShipParallelEnv
+    from maritime_rl_pkg.env_multi_agent_ppo import MultiShipParallelEnv
 
     def env_creator(config):
         return MultiShipParallelEnv(
@@ -120,15 +121,19 @@ def build_algo_and_env(args):
             policies_to_train=["shared_policy"]
         )
         .api_stack(
-            enable_rl_module_and_learner=False,
-            enable_env_runner_and_connector_v2=False
+            enable_rl_module_and_learner=True,
+            enable_env_runner_and_connector_v2=True
         )
         .debugging(seed=args.seed)
     )
     
 
     algo = config.build_algo()
-    algo.restore(args.checkpoint)
+    
+    # Convert relative checkpoint path to absolute
+    import os
+    checkpoint_path = os.path.abspath(args.checkpoint)
+    algo.restore(checkpoint_path)
 
     return algo, env_creator
 
@@ -136,7 +141,19 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False, checkp
     env = env_creator({"seed": seed})
     obs, infos = env.reset(seed=seed)
 
-    policy = algo.get_policy("shared_policy")
+    # Get RLModule for new API stack
+    rl_module = algo.get_module("shared_policy")
+    
+    # Get action space info from environment
+    first_agent = env.agents[0]
+    action_space = env.action_space(first_agent)
+    action_space_shape = None
+    if hasattr(action_space, 'nvec'):  # MultiDiscrete
+        action_space_shape = list(action_space.nvec)
+    elif hasattr(action_space, 'n'):  # Discrete
+        action_space_shape = [action_space.n]
+    elif hasattr(action_space, 'shape'):  # Box (continuous)
+        action_space_shape = list(action_space.shape)
 
     done = False
     step_count = 0
@@ -150,7 +167,32 @@ def run_one_episode(algo, env_creator, seed, args, capture_history=False, checkp
         actions = {}
 
         for agent_id, agent_obs in obs.items():
-            action, _, _ = policy.compute_single_action(agent_obs, explore=False)
+            # Convert observation to tensor batch format (add batch dimension)
+            obs_tensor = torch.from_numpy(np.array([agent_obs])).float()
+            
+            # Inference with the new API
+            with torch.no_grad():
+                output = rl_module.forward_inference(batch={"obs": obs_tensor})
+                
+                # Extract action from RLModule output
+                if isinstance(output, dict) and "action_dist_inputs" in output:
+                    logits = output["action_dist_inputs"][0].cpu().numpy()  # shape [num_logits]
+                    
+                    # For MultiDiscrete action space
+                    if action_space_shape and len(action_space_shape) > 1:
+                        action = []
+                        offset = 0
+                        for num_categories in action_space_shape:
+                            component_logits = logits[offset:offset + num_categories]
+                            action.append(int(np.argmax(component_logits)))
+                            offset += num_categories
+                        action = np.array(action, dtype=np.int64)
+                    else:
+                        # Single discrete action
+                        action = np.array([int(np.argmax(logits))], dtype=np.int64)
+                else:
+                    raise KeyError(f"Cannot extract action from output keys: {list(output.keys())}")
+            
             actions[agent_id] = action
         
         obs, rewards, terminations, truncations, infos = env.step(actions)
