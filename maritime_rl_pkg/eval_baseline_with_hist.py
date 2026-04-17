@@ -13,9 +13,9 @@ def parse_args():
     p.add_argument("--case", type=int, required=True, help="CORALL Imazu case number for the evaluation")
     p.add_argument("--episodes", type=int, default=20, help="Number of episodes to run for evaluation")
     p.add_argument("--seed", type=int, default=0, help="Base random seed for evaluation")
-    p.add_argument("--dt", type=float, default=0.2, help="Time step duration in seconds for the environment")
-    p.add_argument("--sim_time", type=float, default=300.0, help="Total simulation time in seconds for each episode")
-    p.add_argument("--route_len_nmi", type=float, default=40.0, help="Route length in nautical miles (scaling factor for environment)")
+    p.add_argument("--dt", type=float, default=0.5, help="Time step duration in seconds for the environment")
+    p.add_argument("--sim_time", type=float, default=1950.0, help="Total simulation time in seconds for each episode")
+    p.add_argument("--route_len_nmi", type=float, default=2.0, help="Route length in nautical miles (scaling factor for environment)")
     p.add_argument("--num_workers", type=int, default=0, help="Number of parallel workers to use for evaluation (default: 0 for standalone eval)")
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
     p.add_argument("--save_histories", action="store_true", help="Save per-step state histories for all episodes")
@@ -44,6 +44,12 @@ def build_env_creator(args):
 
 
 def init_history(env, seed, args):
+    # Get final waypoint for ownship (baseline has Xwpt/Ywpt as simple lists, not Xwpt_all)
+    Xwpt = env.Xwpt if hasattr(env, 'Xwpt') else []
+    Ywpt = env.Ywpt if hasattr(env, 'Ywpt') else []
+    final_waypoint_x = float(Xwpt[-1]) if len(Xwpt) > 0 else None
+    final_waypoint_y = float(Ywpt[-1]) if len(Ywpt) > 0 else None
+    
     return {
         "t": [float(env.t)],
         "X_all": [env.X_all.copy()],
@@ -56,6 +62,8 @@ def init_history(env, seed, args):
         "seed": int(seed),
         "baseline": "CORALL_rule_based",
         "checkpoint": "",
+        "final_waypoint_x_nmi": final_waypoint_x,
+        "final_waypoint_y_nmi": final_waypoint_y,
     }
 
 
@@ -283,7 +291,7 @@ def main():
             writer.writerow({k: row.get(k, "") for k in fieldnames})
 
     # Save summary JSON
-    summary_path = output_dir / "policy_eval_summary_VIS.json"
+    summary_path = output_dir / "policy_eval_summary.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 

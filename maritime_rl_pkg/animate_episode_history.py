@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.patches import Circle
 
 from .path_setup import ensure_paths
 ensure_paths()
@@ -64,6 +65,8 @@ def animate_history(
     case = hist.get("case", "?")
     seed = hist.get("seed", "?")
     checkpoint = hist.get("checkpoint", "")
+    final_waypoint_x_nmi = hist.get("final_waypoint_x_nmi")
+    final_waypoint_y_nmi = hist.get("final_waypoint_y_nmi")
 
     n_steps, n_agents, _ = X_all.shape
     own_idx = 0
@@ -166,9 +169,39 @@ def animate_history(
             marker="*",
             color="green",
             zorder=5,
-            label="End",
+            label="End (Reached Position)",
         )
         artists.append(scatter2)
+
+        # Plot final waypoint target if available
+        if final_waypoint_x_nmi is not None and final_waypoint_y_nmi is not None:
+            # Draw circle around final waypoint (200m acceptance radius)
+            waypoint_radius_nmi = 0.200 / NMI  # 200 m = 0.108 nmi
+            circle = Circle(
+                (final_waypoint_x_nmi, final_waypoint_y_nmi),
+                waypoint_radius_nmi,
+                fill=False,
+                edgecolor="red",
+                linewidth=2.0,
+                linestyle="--",
+                alpha=0.7,
+                zorder=4,
+                label="Waypoint Target (200m radius)",
+            )
+            ax.add_patch(circle)
+            artists.append(circle)
+            
+            # Plot waypoint center marker
+            scatter_wp = ax.scatter(
+                final_waypoint_x_nmi,
+                final_waypoint_y_nmi,
+                s=150,
+                marker="X",
+                color="red",
+                zorder=6,
+                label="Final Waypoint",
+            )
+            artists.append(scatter_wp)
 
         # current min separation
         drow = pair_dist[s, own_idx].copy()

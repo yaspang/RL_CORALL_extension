@@ -108,6 +108,12 @@ def build_algo_and_env(args):
     return algo, env_creator
 
 def init_history(env, seed, args):
+    # Get final waypoint for ownship
+    Xwpt = env.Xwpt_all[0]
+    Ywpt = env.Ywpt_all[0]
+    final_waypoint_x = float(Xwpt[-1]) if len(Xwpt) > 0 else None
+    final_waypoint_y = float(Ywpt[-1]) if len(Ywpt) > 0 else None
+    
     return {
         "t": [float(env.t)], 
         "X_all": [env.X_all.copy()],
@@ -120,6 +126,8 @@ def init_history(env, seed, args):
         "seed": int(seed), 
         "baseline": "", 
         "checkpoint": str(args.checkpoint),
+        "final_waypoint_x_nmi": final_waypoint_x,
+        "final_waypoint_y_nmi": final_waypoint_y,
     }
 
 def append_history(history, env):

@@ -165,7 +165,7 @@ def plot_ownship_cpa_panel_baseline_rl(
     ax.set_title("Collision Risk")
     ax.set_ylim([0, 1.0])
     
-    # 3. TCPA (bottom-left) - now uses actual pair_tcpa data
+    # 3. TCPA (bottom-left) 
     ax = axes[1, 0]
     for key, ts in tcpa_b_targets.items():
         ax.plot(tb, ts, "--", linewidth=1.5, alpha=0.7, label=key)
@@ -196,12 +196,11 @@ def plot_ownship_cpa_panel_baseline_rl(
     return Path(save_path)
 
 
-def plot_ownship_cpa_panel(
+def plot_ownship_threat_profile(
     baseline_hist: Dict,
     rl_hist: Dict,
     save_path: str | Path,
     own_idx: int = 0,
-    target_indices: Optional[List[int]] = None,
     t_max: Optional[float] = None,
     dcpa_ylim: Optional[Tuple[float, float]] = None,
     range_ylim: Optional[Tuple[float, float]] = None,
@@ -209,8 +208,9 @@ def plot_ownship_cpa_panel(
     risk_ylim: Optional[Tuple[float, float]] = None,
 ) -> Path:
     """
-    CORALL-style CPA/risk panel comparing baseline vs RL.
-    Shows DCPA, Range, Risk per target ship with baseline (--black) vs RL (-purple).
+    Simplified OWNSHIP-ONLY CPA analysis (for clean comparison to CORALL outputs).
+    Shows AGGREGATE threat profile: max risk, min range, min DCPA across all targets
+    Baseline vs RL without per-target clutter.
     
     Args:
         dcpa_ylim: Y-axis limits for DCPA panel [min, max]. If None, auto-scales.
@@ -226,9 +226,6 @@ def plot_ownship_cpa_panel(
 
     n_agents = X_allb.shape[1]
 
-    if target_indices is None:
-        target_indices = [j for j in range(n_agents) if j != own_idx]
-
     if t_max is not None:
         maskb = tb <= t_max
         maskr = tr <= t_max
@@ -236,74 +233,92 @@ def plot_ownship_cpa_panel(
         maskb = np.ones_like(tb, dtype=bool)
         maskr = np.ones_like(tr, dtype=bool)
 
+    # Compute aggregate threat metrics (across all targets)
+    # Max risk across all targets
+    risk_b_agg = series_max_risk(pair_riskb, own_idx=own_idx)
+    risk_r_agg = series_max_risk(pair_riskr, own_idx=own_idx)
+    
+    # Min DCPA across all targets (filtered by encounter distance)
+    dcpa_b_agg = series_min_abs_dcpa(pair_dcpab, pair_distb, own_idx=own_idx, encounter_dist_nmi=8.0)
+    dcpa_r_agg = series_min_abs_dcpa(pair_dcpar, pair_distr, own_idx=own_idx, encounter_dist_nmi=8.0)
+    
+    # Min range across all targets
+    range_b_agg = []
+    range_r_agg = []
+    for i in range(len(tb)):
+        dists_b = pair_distb[i, own_idx, :]
+        dists_b[own_idx] = np.inf
+        range_b_agg.append(np.nanmin(dists_b) / NMI if np.any(np.isfinite(dists_b)) else np.nan)
+    for i in range(len(tr)):
+        dists_r = pair_distr[i, own_idx, :]
+        dists_r[own_idx] = np.inf
+        range_r_agg.append(np.nanmin(dists_r) / NMI if np.any(np.isfinite(dists_r)) else np.nan)
+    
+    range_b_agg = np.array(range_b_agg)
+    range_r_agg = np.array(range_r_agg)
+    
+    # Min TCPA across all targets
+    tcpa_b_agg = []
+    tcpa_r_agg = []
+    for i in range(len(tb)):
+        tcpa_vals_b = pair_tcpab[i, own_idx, :]
+        tcpa_vals_b[own_idx] = np.inf
+        tcpa_b_agg.append(np.nanmin(tcpa_vals_b) if np.any(np.isfinite(tcpa_vals_b)) else np.nan)
+    for i in range(len(tr)):
+        tcpa_vals_r = pair_tcpar[i, own_idx, :]
+        tcpa_vals_r[own_idx] = np.inf
+        tcpa_r_agg.append(np.nanmin(tcpa_vals_r) if np.any(np.isfinite(tcpa_vals_r)) else np.nan)
+    
+    tcpa_b_agg = np.array(tcpa_b_agg)
+    tcpa_r_agg = np.array(tcpa_r_agg)
+
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 
-    # Plot each target ship's metrics
-    for j in target_indices:
-        # Baseline
-        dcpa_jb = series_dcpa_target_filtered(pair_dcpab, pair_distb, own_idx, j, encounter_dist_nmi=8.0)
-        range_jb = series_range_target(pair_distb, own_idx, j)
-        risk_jb = series_risk_target(pair_riskb, own_idx, j)
-        
-        # RL
-        dcpa_jr = series_dcpa_target_filtered(pair_dcpar, pair_distr, own_idx, j, encounter_dist_nmi=8.0)
-        range_jr = series_range_target(pair_distr, own_idx, j)
-        risk_jr = series_risk_target(pair_riskr, own_idx, j)
-
-        # DCPA (top-left)
-        axs[0, 0].plot(tb[maskb], dcpa_jb[maskb], "--", linewidth=1.5, alpha=0.7, color="black", label=f"TS{j} baseline")
-        axs[0, 0].plot(tr[maskr], dcpa_jr[maskr], "-", linewidth=1.5, alpha=0.7, color="purple", label=f"TS{j} RL")
-        
-        # Range (top-right)
-        axs[0, 1].plot(tb[maskb], range_jb[maskb], "--", linewidth=1.5, alpha=0.7, color="black", label=f"TS{j} baseline")
-        axs[0, 1].plot(tr[maskr], range_jr[maskr], "-", linewidth=1.5, alpha=0.7, color="purple", label=f"TS{j} RL")
-        
-        # Risk (bottom-right)
-        axs[1, 1].plot(tb[maskb], risk_jb[maskb], "--", linewidth=1.5, alpha=0.7, color="black", label=f"TS{j} baseline")
-        axs[1, 1].plot(tr[maskr], risk_jr[maskr], "-", linewidth=1.5, alpha=0.7, color="purple", label=f"TS{j} RL")
-        
-        # TCPA (bottom-left)
-        tcpa_jb = series_tcpa_target(pair_tcpab, own_idx, j)
-        tcpa_jr = series_tcpa_target(pair_tcpar, own_idx, j)
-        axs[1, 0].plot(tb[maskb], tcpa_jb[maskb], "--", linewidth=1.5, alpha=0.7, color="black", label=f"TS{j} baseline")
-        axs[1, 0].plot(tr[maskr], tcpa_jr[maskr], "-", linewidth=1.5, alpha=0.7, color="purple", label=f"TS{j} RL")
-
+    # DCPA (top-left)
+    axs[0, 0].plot(tb[maskb], dcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[0, 0].plot(tr[maskr], dcpa_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
     axs[0, 0].set_ylabel("DCPA (nmi)")
     axs[0, 0].set_title("Distance to Closest Point of Approach")
     axs[0, 0].grid(True, alpha=0.3)
-    axs[0, 0].legend(fontsize=8, loc="best")
+    axs[0, 0].legend(fontsize=10, loc="best")
     if dcpa_ylim is not None:
         axs[0, 0].set_ylim(dcpa_ylim)
 
+    # Range (top-right)
+    axs[0, 1].plot(tb[maskb], range_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[0, 1].plot(tr[maskr], range_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
     axs[0, 1].set_ylabel("Range (nmi)")
     axs[0, 1].set_title("Range (Distance)")
     axs[0, 1].grid(True, alpha=0.3)
-    axs[0, 1].legend(fontsize=8, loc="best")
+    axs[0, 1].legend(fontsize=10, loc="best")
     if range_ylim is not None:
         axs[0, 1].set_ylim(range_ylim)
 
-    # TCPA panel (bottom-left)
+    # TCPA (bottom-left)
+    axs[1, 0].plot(tb[maskb], tcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[1, 0].plot(tr[maskr], tcpa_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
     axs[1, 0].set_ylabel("TCPA (s)")
     axs[1, 0].set_title("Time to Closest Point of Approach")
     axs[1, 0].set_xlabel("Time (s)")
     axs[1, 0].grid(True, alpha=0.3)
-    axs[1, 0].legend(fontsize=8, loc="best")
+    axs[1, 0].legend(fontsize=10, loc="best")
     if tcpa_ylim is not None:
         axs[1, 0].set_ylim(tcpa_ylim)
 
+    # Risk (bottom-right)
+    axs[1, 1].plot(tb[maskb], risk_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[1, 1].plot(tr[maskr], risk_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
     axs[1, 1].set_ylabel("Risk")
-    axs[1, 1].set_title("Collision Risk")
+    axs[1, 1].set_title("Collision Risk (Max Across All Targets)")
+    axs[1, 1].set_xlabel("Time (s)")
     axs[1, 1].grid(True, alpha=0.3)
-    axs[1, 1].legend(fontsize=8, loc="best")
+    axs[1, 1].legend(fontsize=10, loc="best")
     if risk_ylim is not None:
         axs[1, 1].set_ylim(risk_ylim)
 
-    for ax in [axs[0, 0], axs[0, 1], axs[1, 1]]:
-        ax.set_xlabel("Time (s)")
-
     case = baseline_hist.get("case", None)
     seed = baseline_hist.get("seed", None)
-    title = "Ownship CPA Analysis: Baseline vs RL"
+    title = "Ownship CPA Panel"
     if case is not None:
         title += f" | Case {case}"
     if seed is not None:
@@ -650,6 +665,8 @@ def save_episode_history(history: Dict, output_path: str | Path) -> Path:
         seed = np.asarray([history.get("seed", -1)], dtype=int), 
         baseline = np.asarray([history.get("baseline", "")], dtype=object), 
         checkpoint = np.asarray([history.get("checkpoint", "")], dtype=object),
+        final_waypoint_x_nmi = np.asarray([history.get("final_waypoint_x_nmi", None)], dtype=object),
+        final_waypoint_y_nmi = np.asarray([history.get("final_waypoint_y_nmi", None)], dtype=object),
     )
 
     return output_path
@@ -673,6 +690,8 @@ def load_episode_history(path: str | Path) -> Dict:
         "seed": int(data["seed"][0]) if "seed" in data else None,
         "baseline": str(data["baseline"][0]) if "baseline" in data else None,
         "checkpoint": str(data["checkpoint"][0]) if "checkpoint" in data else None,
+        "final_waypoint_x_nmi": float(data["final_waypoint_x_nmi"][0]) if "final_waypoint_x_nmi" in data and data["final_waypoint_x_nmi"][0] is not None else None,
+        "final_waypoint_y_nmi": float(data["final_waypoint_y_nmi"][0]) if "final_waypoint_y_nmi" in data and data["final_waypoint_y_nmi"][0] is not None else None,
     }
 
     return history
@@ -1223,10 +1242,10 @@ def make_overlay_figure_set(
         output_dir / "encounter_detail_zoom.png",
         target_idx=None,
     )
-    cpa_panel = plot_ownship_cpa_panel(
+    cpa_panel = plot_ownship_threat_profile(
         baseline_history,
         trained_history,
-        output_dir / "cpa_analysis_panel.png",
+        output_dir / "ownship_threat_profile.png",
         own_idx=own_idx,
         dcpa_ylim=dcpa_ylim,
         range_ylim=range_ylim,
