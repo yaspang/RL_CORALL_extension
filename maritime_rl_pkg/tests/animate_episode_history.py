@@ -20,10 +20,10 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Circle
 
-from .path_setup import ensure_paths
+from ..path_setup import ensure_paths
 ensure_paths()
 
-from .episode_overlay_tools import load_episode_history
+from ..episode_overlay_tools import load_episode_history
 from visualization.rendering import animate_ship
 
 NMI = 1852.0

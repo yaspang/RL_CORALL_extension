@@ -105,8 +105,9 @@ def get_obstacle_data(case_number):
     Yob = []
     psiob = []
     
-    # Default velocity (you may want to adjust this)
-    Vob = [18.52] * len(obstacles)  # Assuming 9.5 m/s for all obstacles
+    # Default velocity: 18.52 m/s (~10 knots) for all obstacles
+    # Creates list [18.52, 18.52, ...] with one value per obstacle (NOT product)
+    Vob = [18.52] * len(obstacles)
     
     # Extract positions and angles from obstacles
     for obstacle in obstacles:

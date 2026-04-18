@@ -93,7 +93,7 @@ class SingleAgentOwnshipEnv(gym.Env):
         self,
         case_number: int,
         dt: float = 0.5,
-        sim_time: float = 1950.0,
+        sim_time: float = 490.0,
         render_mode: Optional[str] = None,
         # action discretization
         n_heading: int = 7,

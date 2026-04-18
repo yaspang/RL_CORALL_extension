@@ -806,7 +806,7 @@ class MultiShipParallelEnv(ParallelEnv):
             agent_already_done = self.agent_reached_goal[agent]
 
             # === REWARD FUNCTION ===
-            # 6 terms: waypoint progress + risk penalty + near-miss penalty + collision penalty + time penalty + success bonus
+            # 5 terms: waypoint progress + risk penalty + near-miss penalty + collision penalty + success bonus
             total = 0.0
 
             if not agent_already_done:
@@ -899,8 +899,8 @@ class MultiShipParallelEnv(ParallelEnv):
             
             
             # Time penalty: small per-step cost to encourage faster completion
-            w_time = -0.01
-            total += w_time
+            #w_time = -0.01
+            #total += w_time
             
 
             # Success: reached final wp and within radius 

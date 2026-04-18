@@ -596,7 +596,19 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
         })
     
     grouped_df = pd.DataFrame(grouped_data)
-    x = grouped_df['n_agents'].values
+    
+    # Convert pandas Series to numpy arrays for matplotlib compatibility
+    x = np.array(grouped_df['n_agents'].values, dtype=float)
+    baseline_sep_arr = np.array(grouped_df['baseline_sep'].values, dtype=float)
+    rl_sep_arr = np.array(grouped_df['rl_sep'].values, dtype=float)
+    baseline_risk_arr = np.array(grouped_df['baseline_risk'].values, dtype=float)
+    rl_risk_arr = np.array(grouped_df['rl_risk'].values, dtype=float)
+    baseline_dist_arr = np.array(grouped_df['baseline_dist'].values, dtype=float)
+    rl_dist_arr = np.array(grouped_df['rl_dist'].values, dtype=float)
+    baseline_time_arr = np.array(grouped_df['baseline_time'].values, dtype=float)
+    rl_time_arr = np.array(grouped_df['rl_time'].values, dtype=float)
+    baseline_collision_arr = np.array(grouped_df['baseline_collision'].values, dtype=float) * 100
+    rl_collision_arr = np.array(grouped_df['rl_collision'].values, dtype=float) * 100
     
     fig = plt.figure(figsize=(16, 10))
     gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.3)
@@ -605,16 +617,16 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     # ===== Panel 1 (Top Left): Total Path Length Efficiency =====
     ax = fig.add_subplot(gs[0, 0])
-    ax.plot(x, grouped_df['baseline_dist'], 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_dist_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
-    ax.plot(x, grouped_df['rl_dist'], 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_dist_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
     
     # Add efficiency percentages (GREEN for shorter path, RED for longer)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, grouped_df['rl_dist'].iloc[i] - 80, 
+        ax.text(xi, rl_dist_arr[i] - 80, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
@@ -628,16 +640,16 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     # ===== Panel 2 (Top Right): Total Time Travelled Efficiency =====
     ax = fig.add_subplot(gs[0, 1])
-    ax.plot(x, grouped_df['baseline_time'], 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_time_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
-    ax.plot(x, grouped_df['rl_time'], 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_time_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
     
     # Add efficiency percentages (GREEN for shorter time, RED for longer time - more time is worse)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, grouped_df['rl_time'].iloc[i] + 10, 
+        ax.text(xi, rl_time_arr[i] + 10, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
@@ -657,9 +669,9 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
     ax = fig.add_subplot(gs[1, 0])
-    ax.plot(x, grouped_df['baseline_sep'], 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_sep_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
-    ax.plot(x, grouped_df['rl_sep'], 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_sep_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
     
     # Add desired min separation distance line (3 * LOA = 90m)
@@ -671,7 +683,7 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, grouped_df['rl_sep'].iloc[i] - 50, 
+        ax.text(xi, rl_sep_arr[i] - 50, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
@@ -685,16 +697,16 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     # ===== Panel 4 (Bottom Center): Risk Exposure =====
     ax = fig.add_subplot(gs[1, 1])
-    ax.plot(x, grouped_df['baseline_risk'], 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_risk_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
-    ax.plot(x, grouped_df['rl_risk'], 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_risk_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
     
     # Add efficiency percentages (GREEN for lower risk, RED for higher)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, grouped_df['rl_risk'].iloc[i] + 0.03 * grouped_df['baseline_risk'].max(), 
+        ax.text(xi, rl_risk_arr[i] + 0.03 * baseline_risk_arr.max(), 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
@@ -708,16 +720,16 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     # ===== Panel 5 (Bottom Right): Collision Rate =====
     ax = fig.add_subplot(gs[1, 2])
-    ax.plot(x, grouped_df['baseline_collision'] * 100, 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_collision_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
-    ax.plot(x, grouped_df['rl_collision'] * 100, 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_collision_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
     
     # Add efficiency percentages (GREEN for lower collision rate, RED for higher)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['collision_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, grouped_df['rl_collision'].iloc[i] * 100 + 5, 
+        ax.text(xi, rl_collision_arr[i] + 5, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
     
