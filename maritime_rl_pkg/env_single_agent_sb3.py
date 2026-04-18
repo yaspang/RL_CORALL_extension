@@ -97,10 +97,10 @@ class SingleAgentOwnshipEnv(gym.Env):
         render_mode: Optional[str] = None,
         # action discretization
         n_heading: int = 7,
-        n_speed: int = 5,
+        #n_speed: int = 5,
         max_heading_change_deg: float = 25.0,
-        u_min: float = 5.0,
-        u_max: float = 10.0,
+        #u_min: float = 5.0,
+        #u_max: float = 10.0,
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
         seed: Optional[int] = None,
@@ -119,10 +119,7 @@ class SingleAgentOwnshipEnv(gym.Env):
             sim_time=sim_time,
             render_mode=render_mode,
             n_heading=n_heading,
-            n_speed=n_speed,
             max_heading_change_deg=max_heading_change_deg,
-            u_min=u_min,
-            u_max=u_max,
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
             seed=seed,
@@ -191,7 +188,6 @@ class SingleAgentOwnshipEnv(gym.Env):
         psi_own = float(X_all[0, 2])
         
         center_heading = (self.env_multi.n_heading - 1) // 2
-        center_speed = (self.env_multi.n_speed - 1) // 2
         
         for k in range(1, n_agents):
             # Obstacles are PASSIVE (no reactive avoidance)
@@ -199,7 +195,7 @@ class SingleAgentOwnshipEnv(gym.Env):
             # This creates deterministic collision courses for testing avoidance learning
             
             # Center actions = maintain current heading and speed
-            scripted_actions[f"ship_{k}"] = np.array([center_heading, center_speed], dtype=np.int32)
+            scripted_actions[f"ship_{k}"] = np.array([center_heading], dtype=np.int32)
         
         # Step multi-agent environment
         obs_dict, reward_dict, terminated_dict, truncated_dict, info_dict = self.env_multi.step(scripted_actions)

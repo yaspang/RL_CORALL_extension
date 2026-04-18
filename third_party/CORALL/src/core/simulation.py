@@ -15,7 +15,7 @@ from src.dynamics.actuator_modeling import actuator_modeling
 from src.risk_assessment.risk_calculations import risk_calculations
 from src.navigation.reactive_avoidance import reactive_avoidance
 from src.visualization.animate import animate_step
-from src.utils.imazu_cases import get_obstacles, nautical_to_meters, obstacle_cases, get_obstacle_data
+from utils.imazu_cases_old import get_obstacles, nautical_to_meters, obstacle_cases, get_obstacle_data
 import matplotlib.ticker as ticker
 # Optional LLM imports
 try:

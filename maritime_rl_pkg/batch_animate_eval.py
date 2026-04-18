@@ -18,7 +18,6 @@ from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
-from matplotlib.patches import Circle
 
 from .path_setup import ensure_paths
 ensure_paths()
@@ -165,46 +164,32 @@ def animate_single_episode(
         )
         artists.append(scatter1)
         
-        # End marker
-        scatter2 = ax.scatter(
-            X_all[-1, own_idx, 0] / NMI,
-            X_all[-1, own_idx, 1] / NMI,
-            s=90,
-            marker="*",
-            color="green",
-            zorder=5,
-            label="End (Reached Position)",
-        )
-        artists.append(scatter2)
-        
-        # Plot final waypoint target if available (200m acceptance radius)
+        # Plot final waypoint target if available
         if final_waypoint_x_nmi is not None and final_waypoint_y_nmi is not None:
-            waypoint_radius_nmi = 0.200 / NMI  # 200 m acceptance radius
-            circle = Circle(
-                (final_waypoint_x_nmi, final_waypoint_y_nmi),
-                waypoint_radius_nmi,
-                fill=False,
-                edgecolor="red",
-                linewidth=2.0,
-                linestyle="--",
-                alpha=0.7,
-                zorder=4,
-                label="Waypoint Target (200m radius)",
-            )
-            ax.add_patch(circle)
-            artists.append(circle)
-            
-            # Plot waypoint center marker
+            # Plot waypoint center marker only
             scatter_wp = ax.scatter(
                 final_waypoint_x_nmi,
                 final_waypoint_y_nmi,
                 s=150,
                 marker="X",
-                color="red",
+                color="darkgreen",
                 zorder=6,
-                label="Final Waypoint",
             )
             artists.append(scatter_wp)
+        
+        # End marker (no legend label)
+        scatter2 = ax.scatter(
+            X_all[-1, own_idx, 0] / NMI,
+            X_all[-1, own_idx, 1] / NMI,
+            s=70,
+            marker="o",
+            color="purple",
+            alpha=0.6,
+            edgecolors="black",
+            linewidth=1.0,
+            zorder=5,
+        )
+        artists.append(scatter2)
         
         # Current min separation
         if len(pair_dist) > s and own_idx < len(pair_dist[s]):
@@ -285,42 +270,52 @@ def batch_animate_episodes(
     with open(summary_file, 'r') as f:
         summary = json.load(f)
     
-    # Try to get per_episode_metrics from summary (policy eval format)
-    per_episode_metrics = summary.get("per_episode_metrics", [])
+    # First, try to get best episode from summary fields (SB3 eval format)
+    best_idx = summary.get("best_return_episode_idx")
+    best_return = summary.get("best_return_value")
     
-    # If not found, try to load from CSV file (baseline eval format)
-    if not per_episode_metrics:
-        csv_file = eval_path.parent / "policy_eval_per_episode.csv" if "seed_0" in str(eval_path) else eval_path / "policy_eval_per_episode.csv"
-        # Check seed_0 subdirectory if needed
-        if not csv_file.exists():
-            csv_file = eval_path / "seed_0" / "policy_eval_per_episode.csv"
+    # If not found in summary, try to get per_episode_metrics from summary (policy eval format)
+    if best_idx is None or best_return is None:
+        per_episode_metrics = summary.get("per_episode_metrics", [])
         
-        if csv_file.exists():
-            import csv
-            with open(csv_file, 'r') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    try:
-                        per_episode_metrics.append({
-                            "episode_index": int(row.get("episode_index", 0)),
-                            "episode_return": float(row.get("episode_return_ownship", 0.0))
-                        })
-                    except (ValueError, KeyError):
-                        pass
+        # If not found, try to load from CSV file (baseline eval format)
+        if not per_episode_metrics:
+            csv_file = eval_path.parent / "policy_eval_per_episode.csv" if "seed_0" in str(eval_path) else eval_path / "policy_eval_per_episode.csv"
+            # Check seed_0 subdirectory if needed
+            if not csv_file.exists():
+                csv_file = eval_path / "seed_0" / "policy_eval_per_episode.csv"
+            
+            if csv_file.exists():
+                import csv
+                with open(csv_file, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        try:
+                            per_episode_metrics.append({
+                                "episode_index": int(row.get("episode_index", 0)),
+                                "episode_return": float(row.get("episode_return_ownship", 0.0))
+                            })
+                        except (ValueError, KeyError):
+                            pass
+        
+        if not per_episode_metrics:
+            print("ERROR: No best_return_episode_idx in summary, no per_episode_metrics, and no CSV file found")
+            return
+        
+        # Find episode with best return
+        best_idx = 0
+        best_return = per_episode_metrics[0]["episode_return"]
+        for i, metrics in enumerate(per_episode_metrics):
+            if metrics["episode_return"] > best_return:
+                best_return = metrics["episode_return"]
+                best_idx = i
+        
+        print(f"Found {len(per_episode_metrics)} episodes total")
+    else:
+        # Count total episodes from files
+        episode_files = sorted(hist_dir.glob("*.npz"))
+        print(f"Found {len(episode_files)} episodes total")
     
-    if not per_episode_metrics:
-        print("ERROR: No per_episode_metrics in summary and no CSV file found")
-        return
-    
-    # Find episode with best return
-    best_idx = 0
-    best_return = per_episode_metrics[0]["episode_return"]
-    for i, metrics in enumerate(per_episode_metrics):
-        if metrics["episode_return"] > best_return:
-            best_return = metrics["episode_return"]
-            best_idx = i
-    
-    print(f"Found {len(per_episode_metrics)} episodes total")
     print(f"Best episode: Episode {best_idx:03d} with return = {best_return:.3f}")
     
     # Find corresponding npz file for best episode

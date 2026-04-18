@@ -28,7 +28,7 @@ from .path_setup import ensure_paths
 ensure_paths()
 
 # importing CORALL core modules (from repo)
-from utils.imazu_cases import get_obstacle_data
+from utils.imazu_cases_old import get_obstacle_data
 from navigation.planning import waypoint_selection, planning
 from dynamics.controller import controller
 from dynamics.actuator_modeling import actuator_modeling 
@@ -51,8 +51,8 @@ class ObsNorm:
     # Position bounds in meters (scenarios ~16km extent)
     pos_max_m: float = 15000.0
     
-    # Speed bounds in m/s
-    u_max: float = 15.0
+    # Velocity bounds in m/s (surge + obstacle speeds up to 25 m/s)
+    vel_max: float = 20.0
     
     # Turn rate bounds in rad/s (typical ship rates)
     r_max: float = 0.5
@@ -78,6 +78,8 @@ class MultiShipParallelEnv(ParallelEnv):
             - dx (meters) - relative position
             - dy (meters) - relative position
             - sin(bearing_rel), cos(bearing_rel) - relative bearing
+            - du_x (meters / s) - relative velocity (x-component)
+            - du_y (meters / s) - relative velocity (y-component)
 
     All features are continuous (no arbitrary discretization).
     """
@@ -89,21 +91,18 @@ class MultiShipParallelEnv(ParallelEnv):
         self, 
         case_number: int, 
         dt: float = 0.5, 
-        sim_time: float = 1950.0, 
+        sim_time: float = 490.0, 
         render_mode: Optional[str] = None, 
-        # action discretization
-        n_heading: int = 7, 
-        n_speed: int = 5, 
+        # action discretization (heading only - no speed control)
+        n_heading: int = 7,
         max_heading_change_deg: float = 25.0, 
-        ## speed range selected according to typical traffic speeds (9.5m/s) in Imazu cases, but tunable
-        u_min: float = 5.0, 
-        u_max: float = 10.0, 
         # ship geometry for collision logic 
         loa_m: float = 30.0,
         # observation normalization
         obs_norm: ObsNorm = ObsNorm(),
         # waypoint generation parameter
         route_len_nmi: float = 2.0,
+        
         # spatial optimization (AABB broad-phase filtering for pairwise CPA)
         enable_aabb_filtering: bool = False,
         aabb_radius_m: float = 1500.0,
@@ -116,11 +115,8 @@ class MultiShipParallelEnv(ParallelEnv):
         self.sim_time = float(sim_time)
         self.render_mode = render_mode
         self.n_heading = int(n_heading)
-        self.n_speed = int(n_speed)
-    
         self.max_heading_change = np.deg2rad(float(max_heading_change_deg))
-        self.u_min = float(u_min)
-        self.u_max = float(u_max)
+        # Speed control removed - ownship maintains constant surge speed
 
         self.LOA_own = float(loa_m)
         self.norm = obs_norm
@@ -141,29 +137,30 @@ class MultiShipParallelEnv(ParallelEnv):
         self.agents = [f"ship_{i}" for i in range(self.n_agents)]
         self.possible_agents = self.agents[:]
     
-        # Action Spaces: MultiDiscrete([heading_idx, speed_idx]) for each agent 
+        # Action Spaces: Discrete(n_heading) for heading control only
         self._action_space = {
-            agent: spaces.MultiDiscrete([self.n_heading, self.n_speed]) for agent in self.agents
+            agent: spaces.Discrete(self.n_heading) for agent in self.agents
         }
     
         # Observation Spaces: same for all n_agents
-        # Own state: [x, y, sin(psi), cos(psi), r, u, b]
-        own_dim = 7
-        # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel), du_rel]
-        per_other_dim = 5
+        # Own state: [x, y, sin(psi), cos(psi), r, u_x, u_y, b] (8 features)
+        # u_x = u * cos(psi), u_y = u * sin(psi) for velocity components
+        own_dim = 8
+        # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel), du_x, du_y] (6 features)
+        per_other_dim = 6
         obs_dim = own_dim + (self.n_agents - 1) * per_other_dim
         
         # Bounds for observation space
-        low_bounds = np.array(
-            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, 0.0, -self.norm.b_max] +
-            [-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.u_max] * (self.n_agents - 1),
-            dtype=np.float32
-        )
-        high_bounds = np.array(
-            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.u_max, self.norm.b_max] +
-            [self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.u_max] * (self.n_agents - 1),
-            dtype=np.float32
-        )
+        # Own state bounds: [x, y, sin(psi), cos(psi), r, u_x, u_y, b]
+        own_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, -self.norm.vel_max, -self.norm.vel_max, -self.norm.b_max], dtype=np.float32)
+        own_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.vel_max, self.norm.vel_max, self.norm.b_max], dtype=np.float32)
+        
+        # Per-other bounds: [dx, dy, sin(bearing), cos(bearing), du_x, du_y]
+        per_other_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.vel_max, -self.norm.vel_max], dtype=np.float32)
+        per_other_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.vel_max, self.norm.vel_max], dtype=np.float32)
+        
+        low_bounds = np.concatenate([own_low] + [per_other_low] * (self.n_agents - 1))
+        high_bounds = np.concatenate([own_high] + [per_other_high] * (self.n_agents - 1))
         self._obs_space = {
             agent: spaces.Box(low=low_bounds, high=high_bounds, dtype=np.float32) for agent in self.agents
         }
@@ -248,10 +245,11 @@ class MultiShipParallelEnv(ParallelEnv):
         ## keep CORALL encounter geometry but set ownship at origin and its speed at same nominal traffic speed scale as other ships in the case 
         ## (for more consistent dynamics across cases and easier learning)
 
+        # Ownship uses first obstacle velocity as cruise speed (or default 9.5 m/s)
         if len(Vob) > 0:
-            u0 = float(np.clip(Vob[0], self.u_min, self.u_max))
+            u0 = float(Vob[0])
         else:
-            u0 = float(np.clip(0.5 * (self.u_min + self.u_max), self.u_min, self.u_max))
+            u0 = 9.5  # Default cruise speed in m/s
         
         self.u_des_all[0] = u0
         X_all[0, :] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, u0], dtype=float)
@@ -268,7 +266,7 @@ class MultiShipParallelEnv(ParallelEnv):
         intercept_x_nmi = route_len_nmi / 2.0
         
         for j in range(self.n_obstacles):
-            u_j = float(np.clip(Vob[j], self.u_min, self.u_max))
+            u_j = float(Vob[j])
             self.u_des_all[j + 1] = u_j
             
             # Apply scaling to obstacle positions (ownship remains at origin)
@@ -527,9 +525,8 @@ class MultiShipParallelEnv(ParallelEnv):
         self.prev_X_all = self.X_all.copy()
 
 
-        # 1) decode actions into (psi_ref, u_cmd)
+        # 1) decode actions into (psi_ref) - heading only (speed is constant)
         psi_ref = np.zeros(self.n_agents, dtype=float)
-        u_cmd = np.zeros(self.n_agents, dtype=float)
 
         for k, agent in enumerate(self.agents):
             # skip agents that have already terminated (not in actions dict) - to handle agents dropping out in long episodes
@@ -540,29 +537,17 @@ class MultiShipParallelEnv(ParallelEnv):
             # Obstacles (k>0) propagate forward with FIXED initial heading (obstacle_sim style)
             # This ensures true straight-line collision courses for training
             if k == 0:
-                # OWNSHIP: Full waypoint planning + RL action
-                a = np.asarray(actions[agent], dtype=float)
-                if a.size != 2:
-                    raise ValueError(f"Action for {agent} must be shape (2,), got {a.shape}")
-                
-                heading_idx = int(np.clip(a[0], 0, self.n_heading - 1))
-                speed_idx = int(np.clip(a[1], 0, self.n_speed - 1))
+                # OWNSHIP: Full waypoint planning + RL action (heading only)
+                heading_idx = int(np.asarray(actions[agent], dtype=int))
+                heading_idx = int(np.clip(heading_idx, 0, self.n_heading - 1))
 
-                # normalize to [-1, 1] scale
+                # normalize heading index to [-1, 1] scale
                 if self.n_heading > 1:
                     delta_heading_norm = -1.0 + 2.0 * heading_idx / (self.n_heading - 1)
                 else: 
                     delta_heading_norm = 0.0
                 
-                if self.n_speed > 1:
-                    delta_speed_norm = -1.0 + 2.0 * speed_idx / (self.n_speed - 1)
-                else:
-                    delta_speed_norm = 0.0
-                
                 delta_heading = delta_heading_norm * self.max_heading_change
-
-                # map speed norm [-1, 1] to [u_min, u_max]
-                u_cmd[k] = self.u_min + 0.5 * (delta_speed_norm + 1.0) * (self.u_max - self.u_min)
 
                 # CORALL waypoint selection and planner -> use coordinates in nmi 
                 Xwpt_k = self.Xwpt_all[k]
@@ -586,19 +571,19 @@ class MultiShipParallelEnv(ParallelEnv):
                 # OBSTACLES: Use fixed initial heading (straight-line propagation)
                 # This creates deterministic collision courses without replanning
                 psi_ref[k] = self.X_all[k, 2]  # Use current heading (maintain)
-                u_cmd[k] = self.X_all[k, 5]    # Use current speed (maintain)
         
-        # 2) advance dynamics for each ship 
+        # 2) advance dynamics for each ship (speed held constant)
         for k in range(self.n_agents):
             x_m, y_m, psi_k, r_k, b_k, u_k = self.X_all[k, :]
 
             # ownship controlled by RL -> target obstacles according to fixed speed + heading by kinematics
             ## (Single-agent prelim results) -- WILL CHANGE upon build to MARL
             if k == 0:
-                # OWNSHIP: Full dynamics with controller and actuator modeling
+                # OWNSHIP: Full dynamics with controller and actuator modeling (heading only)
                 ui_psi1_k = float(self.ui_psi1_all[k])
+                # Use current surge speed (u_k) instead of speed command
                 tau_c, v_c, ui_psi1_k = controller(
-                    psi_ref[k], psi_k, r_k, u_cmd[k], b_k, ui_psi1_k, self.dt
+                    psi_ref[k], psi_k, r_k, u_k, b_k, ui_psi1_k, self.dt
                 )
                 self.ui_psi1_all[k] = ui_psi1_k
 
@@ -611,7 +596,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 # OBSTACLES: Fixed heading + speed (pure kinematics, no controller)
                 # This ensures deterministic straight-line collision courses
                 psi = psi_ref[k]  # Fixed heading (set above)
-                u = u_cmd[k]      # Fixed speed (set above)
+                u = self.X_all[k, 5]  # Fixed speed (current surge speed)
                 
                 # Simple kinematic propagation: x_dot = u * cos(psi), y_dot = u * sin(psi)
                 dx_m = u * np.cos(psi) * self.dt
@@ -683,6 +668,10 @@ class MultiShipParallelEnv(ParallelEnv):
     
     def own_state_features(self, k: int) -> np.ndarray:
         x_m, y_m, psi, r, b, u = self.X_all[k, :]
+        
+        # Decompose surge speed into x and y velocity components
+        u_x = u * np.cos(psi)
+        u_y = u * np.sin(psi)
     
         feats = np.array([
             x_m,
@@ -690,7 +679,8 @@ class MultiShipParallelEnv(ParallelEnv):
             np.sin(psi), 
             np.cos(psi), 
             r,
-            u,
+            u_x,
+            u_y,
             b,
         ], dtype=np.float32)
 
@@ -700,6 +690,10 @@ class MultiShipParallelEnv(ParallelEnv):
     def get_observation(self, k: int) -> np.ndarray:
         own = self.own_state_features(k)
         xk_m, yk_m, psik, uk = self.X_all[k, 0], self.X_all[k, 1], self.X_all[k, 2], self.X_all[k, 5]
+        
+        # Own surge speed components
+        uk_x = uk * np.cos(psik)
+        uk_y = uk * np.sin(psik)
 
         per_other = []
         for j in range(self.n_agents):
@@ -715,15 +709,22 @@ class MultiShipParallelEnv(ParallelEnv):
             bearing_rel = self._wrap_angle(bearing - psik)
             sin_b, cos_b = np.sin(bearing_rel), np.cos(bearing_rel)
             
-            # Relative speed: speed of agent j relative to agent k
-            du_rel = float(uj - uk)
+            # Relative velocity: decompose into x and y components
+            # v_j = [uj * cos(psij), uj * sin(psij)]
+            # v_k = [uk * cos(psik), uk * sin(psik)]
+            # du = v_j - v_k
+            uj_x = uj * np.cos(psij)
+            uj_y = uj * np.sin(psij)
+            du_x = uj_x - uk_x
+            du_y = uj_y - uk_y
 
             vec = np.array([
                 dx_m,
                 dy_m,
                 sin_b,
                 cos_b,
-                du_rel,
+                du_x,
+                du_y,
             ], dtype=np.float32)
 
             per_other.append(vec)
@@ -845,7 +846,7 @@ class MultiShipParallelEnv(ParallelEnv):
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
             
-            w_risk = -100.0
+            w_risk = -30.0
             total += w_risk * max_risk
         
 
@@ -873,7 +874,7 @@ class MultiShipParallelEnv(ParallelEnv):
             min_dist = float(np.min(pair_dist[k][np.isfinite(pair_dist[k])])) if np.any(np.isfinite(pair_dist[k])) else np.inf
             if min_dist > safe_dist_m: 
                 # good distance maintained -> reward
-                w_safe = 2.9
+                w_safe = 10.0
                 r_separation = w_safe * (1.0 - (min_dist - safe_dist_m) / 5000.0)
                 total += r_separation
             elif min_dist > LOA and min_dist <= safe_dist_m:
@@ -924,7 +925,7 @@ class MultiShipParallelEnv(ParallelEnv):
             else:
                 final_reached = final_waypoint_reached_by_index
 
-            w_success = 50.0
+            w_success = 200.0
 
             if final_reached:
                 # Track agent success in infos

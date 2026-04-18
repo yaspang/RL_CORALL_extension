@@ -403,7 +403,7 @@ def plot_full_trajectory_overlay(
                 marker="s",
                 s=35,
                 alpha=min(0.9, target_alpha + 0.2),
-                color="cyan",
+                color="tab:blue",
                 label="Target starts" if (j == 1 and show_target_labels) else None,
                 zorder=2,
             )
@@ -412,20 +412,55 @@ def plot_full_trajectory_overlay(
     # Ownship tracks
     # -----------------------
     ax.plot(xb0, yb0, "--", color="black", linewidth=2.5, label="CORALL baseline ownship", zorder=3)
-    ax.plot(xr0, yr0, "--", color="purple", linewidth=2.5, label="RL policy ownship", zorder=3)
+    ax.plot(xr0, yr0, "-", color="purple", linewidth=2.5, label="RL policy ownship", zorder=3)
 
     # Start marker
     ax.scatter(xb0[0], yb0[0], s=120, color="orange", label="Start", zorder=4)
 
-    # End markers
-    ax.scatter(xb0[-1], yb0[-1], marker="*", s=160, color="orange", label="Baseline end", zorder=4)
-    ax.scatter(xr0[-1], yr0[-1], marker="*", s=160, color="green", label="RL end", zorder=4)
-
-    # Goal marker
+    # Success zone (green acceptance region around final waypoint)
     if show_goal:
-        # use baseline end x as a simple display proxy for goal vicinity
-        goal_x = max(xb0[-1], xr0[-1])
-        ax.scatter(goal_x, 0.0, marker="D", s=80, color="tab:red", label="Goal vicinity", zorder=4)
+        from matplotlib.patches import Circle
+        # Average end positions of both ownships as goal location proxy
+        goal_x_avg = (xb0[-1] + xr0[-1]) / 2.0
+        goal_y_avg = (yb0[-1] + yr0[-1]) / 2.0
+        
+        # 200m = ~0.108 nmi acceptance radius
+        waypoint_radius_nmi = 0.200 / 1852.0
+        
+        circle_fill = Circle(
+            (goal_x_avg, goal_y_avg),
+            waypoint_radius_nmi,
+            fill=True,
+            facecolor="green",
+            edgecolor="darkgreen",
+            linewidth=2.0,
+            alpha=0.12,
+            zorder=1,
+            label="Success zone (200m radius)",
+        )
+        ax.add_patch(circle_fill)
+        
+        circle_boundary = Circle(
+            (goal_x_avg, goal_y_avg),
+            waypoint_radius_nmi,
+            fill=False,
+            edgecolor="darkgreen",
+            linewidth=2.0,
+            linestyle="-",
+            alpha=0.7,
+            zorder=4,
+        )
+        ax.add_patch(circle_boundary)
+        
+        # Goal marker at center
+        ax.scatter(
+            goal_x_avg, goal_y_avg,
+            marker="X",
+            s=150,
+            color="darkgreen",
+            zorder=5,
+            label="Goal location",
+        )
 
     ax.set_title(
         f"Baseline vs RL trajectory | Imazu case {baseline_hist.get('case', '?')} | seed {baseline_hist.get('seed', '?')}",
@@ -517,16 +552,59 @@ def plot_encounter_detail_clean(
     ax.plot(xb0[i0_b:i1_b], yb0[i0_b:i1_b], "--", color="black", linewidth=2.5, label="Baseline ownship")
     ax.plot(xr0[i0_r:i1_r], yr0[i0_r:i1_r], "-", color="purple", linewidth=2.5, label="RL ownship")
 
-    ax.plot(xbt[i0_b:i1_b], ybt[i0_b:i1_b], color="tab:blue", linewidth=2.0,
-            label=f"Baseline target ship {target_idx_b}")
-    ax.plot(xrt[i0_r:i1_r], yrt[i0_r:i1_r], color="tab:cyan", linewidth=2.0,
-            label=f"RL target ship {target_idx_r}")
+    # Target trajectories - same color for cleaner visualization
+    ax.plot(xbt[i0_b:i1_b], ybt[i0_b:i1_b], color="tab:blue", linewidth=2.0, linestyle=":",
+            label="Target trajectory")
+    ax.plot(xrt[i0_r:i1_r], yrt[i0_r:i1_r], color="tab:blue", linewidth=2.0, linestyle=":",
+            alpha=0.6)
 
-    ax.scatter(xb_cpa, yb_cpa, marker="X", s=180, color="red", label="Baseline CPA")
-    ax.scatter(xr_cpa, yr_cpa, marker="X", s=180, color="orange", label="RL CPA")
-
-    ax.plot([xbt[ib], xb_cpa], [ybt[ib], yb_cpa], "-", color="red", linewidth=1.8, alpha=0.9)
-    ax.plot([xrt[ir], xr_cpa], [yrt[ir], yr_cpa], "-", color="orange", linewidth=1.8, alpha=0.9)
+    # Show ship positions at closest approach (not just X markers)
+    from visualization.rendering import animate_ship
+    
+    # Baseline ownship and target at CPA
+    baseline_CPA_artists = animate_ship(
+        xb_cpa, yb_cpa, float(Xb[ib, 0, 2]),
+        (30.0 / NMI) * 1.5,
+        (16.0 / NMI) * 1.5,
+        cpa=0.0,
+        color="black",
+        ax=ax,
+    )
+    rl_CPA_artists = animate_ship(
+        xr_cpa, yr_cpa, float(Xr[ir, 0, 2]),
+        (30.0 / NMI) * 1.5,
+        (16.0 / NMI) * 1.5,
+        cpa=0.0,
+        color="purple",
+        ax=ax,
+    )
+    
+    # Target ships at CPA (same color, both labeled as "Target at CPA")
+    target_baseline_CPA_artists = animate_ship(
+        xbt[ib], ybt[ib], float(Xb[ib, target_idx_b, 2]),
+        (30.0 / NMI) * 1.5,
+        (16.0 / NMI) * 1.5,
+        cpa=0.0,
+        color="tab:blue",
+        ax=ax,
+    )
+    target_rl_CPA_artists = animate_ship(
+        xrt[ir], yrt[ir], float(Xr[ir, target_idx_r, 2]),
+        (30.0 / NMI) * 1.5,
+        (16.0 / NMI) * 1.5,
+        cpa=0.0,
+        color="tab:blue",
+        ax=ax,
+    )
+    
+    # Add legend entries for the ship positions
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8, label='Baseline ownship at CPA'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=8, label='RL ownship at CPA'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='tab:blue', markersize=8, label='Target ship at CPA'),
+    ]
+    ax.legend(handles=ax.get_lines()[:2] + legend_elements, loc="best")
 
     dcpa_b_nmi = np.abs(baseline_hist["pair_dcpa"][ib][0][target_idx_b]) / NMI
     dcpa_r_nmi = np.abs(rl_hist["pair_dcpa"][ir][0][target_idx_r]) / NMI

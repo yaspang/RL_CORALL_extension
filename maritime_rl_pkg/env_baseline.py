@@ -19,7 +19,7 @@ from pettingzoo.utils import ParallelEnv
 from .path_setup import ensure_paths
 ensure_paths()
 
-from utils.imazu_cases import get_obstacle_data
+from utils.imazu_cases_old import get_obstacle_data
 from navigation.planning import waypoint_selection, planning
 from navigation.reactive_avoidance import reactive_avoidance
 from navigation.obstacle_sim import obstacle_sim
@@ -38,14 +38,19 @@ NMI = 1852.0
 
 @dataclass
 class ObsNorm: 
-    """Normalization constants for observation features"""
+    """Observation feature bounds (not scaling)"""
 
-    # position scales (nmi)
-    pos_scale_nmi: float = 2.0              # typical scenario size (CORALL)
-    # speed / turn rate scales
-    u_max: float = 10.0                       # m/s (match action decoder)
-    r_scale: float = 0.25                     # rad/s (tunable -> keep within [-1, 1] with clip)
-    b_scale: float = 5.0                      # __ bias 
+    # Position bounds in meters (scenarios ~16km extent)
+    pos_max_m: float = 15000.0
+    
+    # Velocity bounds in m/s (surge + obstacle speeds up to 25 m/s)
+    vel_max: float = 20.0
+    
+    # Turn rate bounds in rad/s (typical ship rates)
+    r_max: float = 0.5
+    
+    # Actuator bias bounds (typically normalized)
+    b_max: float = 1.0 
 
     # CPA scaling 
     dcpa_scale_m: float = 400.0               # m, normalize DCPA
@@ -80,8 +85,6 @@ class CORALLComparisonEnv(ParallelEnv):
             dt: float = 0.5,
             sim_time: float = 1950.0,
             render_mode: Optional[str] = None,
-            u_min: float = 5.0,
-            u_max: float = 10.0,
             loa_m: float = 30.0,
             bol_m: float = 16.0,
             obs_norm: ObsNorm = ObsNorm(),
@@ -99,11 +102,8 @@ class CORALLComparisonEnv(ParallelEnv):
             self.sim_time = float(sim_time)
             self.render_mode = render_mode
 
-            self.u_min = float(u_min)
-            self.u_max = float(u_max)
             self.LOA_own = float(loa_m)
             self.BOL_own = float(bol_m)
-            self.goal_radius_m = float(goal_radius_m)
             self.norm = obs_norm
             self.route_len_nmi = float(route_len_nmi)
             self.rng = np.random.default_rng(seed)
@@ -120,16 +120,30 @@ class CORALLComparisonEnv(ParallelEnv):
             self.agents = ["ship_0"]
             self.possible_agents = self.agents[:]
 
-            # Actions are ignored; env uses internal CORALL guidance (structural alignment)
+            # Actions are ignored; env uses internal CORALL guidance
+            # Use Discrete(1) since no actual control
             self._action_space = {
-                "ship_0": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
+                "ship_0": spaces.Discrete(1)
             }
 
-            own_dim = 7
-            per_other_dim = 8
+            # Observation space matches multi_agent env:
+            # Own state: [x, y, sin(psi), cos(psi), r, u_x, u_y, b] (8 features)
+            # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel), du_x, du_y] (6 features)
+            own_dim = 8
+            per_other_dim = 6
             obs_dim = own_dim + self.n_obstacles * per_other_dim
+            
+            # Bounds for observation space
+            own_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, -self.norm.vel_max, -self.norm.vel_max, -self.norm.b_max], dtype=np.float32)
+            own_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.vel_max, self.norm.vel_max, self.norm.b_max], dtype=np.float32)
+            per_other_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.vel_max, -self.norm.vel_max], dtype=np.float32)
+            per_other_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.vel_max, self.norm.vel_max], dtype=np.float32)
+            
+            low_bounds = np.concatenate([own_low] + [per_other_low] * self.n_obstacles)
+            high_bounds = np.concatenate([own_high] + [per_other_high] * self.n_obstacles)
+            
             self._obs_space = {
-                "ship_0": spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
+                "ship_0": spaces.Box(low=low_bounds, high=high_bounds, dtype=np.float32)
             }
 
             # State [x, y, psi, r, b, u] for ownship and each obstacle.
@@ -182,11 +196,11 @@ class CORALLComparisonEnv(ParallelEnv):
     # Setup helpers
     # ---------------------------------------------------------------------
     def init_ownship(self) -> np.ndarray:
-        """Initialize ownship consistent with existing env convention."""
+        """Initialize ownship consistent with multi_agent env convention."""
         if len(self.Vob) > 0:
-            u0 = float(np.clip(self.Vob[0], self.u_min, self.u_max))
+            u0 = float(self.Vob[0])
         else:
-            u0 = float(np.clip(0.5 * (self.u_min + self.u_max), self.u_min, self.u_max))
+            u0 = 9.5  # Default cruise speed in m/s
 
         self.u_des = u0
         self.ui_psi1 = 0.0
@@ -425,55 +439,60 @@ class CORALLComparisonEnv(ParallelEnv):
 
     def own_state_features(self) -> np.ndarray:
         x_m, y_m, psi, r, b, u = self.X_all[0, :]
+        
+        # Decompose surge speed into x and y velocity components
+        u_x = u * np.cos(psi)
+        u_y = u * np.sin(psi)
+        
         feats = np.array([
-            (x_m / NMI) / self.norm.pos_scale_nmi,
-            (y_m / NMI) / self.norm.pos_scale_nmi,
+            x_m,
+            y_m,
             np.sin(psi),
             np.cos(psi),
-            r / self.norm.r_scale,
-            b / self.norm.b_scale,
-            u / self.norm.u_max,
+            r,
+            u_x,
+            u_y,
+            b,
         ], dtype=np.float32)
-        return np.clip(feats, -self.norm.clip, self.norm.clip)
+        return feats
 
     def get_observation(self) -> np.ndarray:
         own = self.own_state_features()
-        xk_m, yk_m, psik = self.X_all[0, 0], self.X_all[0, 1], self.X_all[0, 2]
+        xk_m, yk_m, psik, uk = self.X_all[0, 0], self.X_all[0, 1], self.X_all[0, 2], self.X_all[0, 5]
+        
+        # Own surge speed components
+        uk_x = uk * np.cos(psik)
+        uk_y = uk * np.sin(psik)
 
         per_other = []
         for j in range(1, self.n_agents_total):
-            xj_m, yj_m, _ = self.X_all[j, 0], self.X_all[j, 1], self.X_all[j, 2]
-            dx_nmi = (xj_m - xk_m) / NMI
-            dy_nmi = (yj_m - yk_m) / NMI
-            dist_nmi = float(np.hypot(dx_nmi, dy_nmi))
+            xj_m, yj_m, psij, uj = self.X_all[j, 0], self.X_all[j, 1], self.X_all[j, 2], self.X_all[j, 5]
+            dx_m = xj_m - xk_m
+            dy_m = yj_m - yk_m
 
-            bearing = float(np.arctan2(dy_nmi, dx_nmi))
+            # Relative bearing from ownship to other ship j
+            bearing = float(np.arctan2(dy_m, dx_m))
             bearing_rel = self._wrap_angle(bearing - psik)
             sin_b, cos_b = np.sin(bearing_rel), np.cos(bearing_rel)
-
-            dcpa_m = float(self.pair_dcpa[0, j])
-            tcpa_s = float(self.pair_tcpa[0, j])
-            risk = float(self.pair_risk[0, j])
-
-            dcpa_n = np.clip(dcpa_m / self.norm.dcpa_scale_m, -self.norm.clip, self.norm.clip)
-            tcpa_n = np.clip(tcpa_s / self.norm.tcpa_scale_s, -self.norm.clip, self.norm.clip)
-            risk01 = float(np.clip(risk, 0.0, 1.0))
-            risk_sym = 2.0 * risk01 - 1.0
+            
+            # Relative velocity: decompose into x and y components
+            uj_x = uj * np.cos(psij)
+            uj_y = uj * np.sin(psij)
+            du_x = uj_x - uk_x
+            du_y = uj_y - uk_y
 
             vec = np.array([
-                dx_nmi / self.norm.pos_scale_nmi,
-                dy_nmi / self.norm.pos_scale_nmi,
-                dist_nmi / self.norm.pos_scale_nmi,
+                dx_m,
+                dy_m,
                 sin_b,
                 cos_b,
-                dcpa_n,
-                tcpa_n,
-                np.clip(risk_sym, -self.norm.clip, self.norm.clip),
+                du_x,
+                du_y,
             ], dtype=np.float32)
-            per_other.append(np.clip(vec, -self.norm.clip, self.norm.clip))
+            per_other.append(vec)
 
         obs = np.concatenate([own] + per_other, axis=0).astype(np.float32)
-        return np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32)
+        return np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
     # ---------------------------------------------------------------------
     # Metrics tracking (no reward shaping for baseline control)

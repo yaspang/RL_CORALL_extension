@@ -58,27 +58,26 @@ class RandomCaseEnv(gym.Wrapper):
         route_len_nmi: Waypoint distance (default: 2.0 NMI)
     """
     
-    # Observation sizes per case (ownship=7 + obstacles*5)
+    # Observation sizes per case (ownship=8 + obstacles*6)
+    # Updated to match new observation space: [x, y, sin(psi), cos(psi), r, u_x, u_y, b] + [dx, dy, sin_b, cos_b, du_x, du_y]
     CASE_OBS_SIZES = {
-        1: 7 + 1*5,   # 1 obstacle = 12
-        6: 7 + 2*5,   # 2 obstacles = 17
-        21: 7 + 3*5,  # 3 obstacles = 22
+        1: 8 + 1*6,   # 1 obstacle = 14
+        6: 8 + 2*6,   # 2 obstacles = 20
+        21: 8 + 3*6,  # 3 obstacles = 26
     }
-    MAX_OBS_SIZE = 22  # Case 21
+    MAX_OBS_SIZE = 26  # Case 21
     
     def __init__(
         self,
         cases_to_train: List[int] = [1, 6, 21],
         num_seeds: int = 100,
         dt: float = 0.5,
-        sim_time: float = 1950.0,
+        sim_time: float = 490.0,
         n_heading: int = 7,
-        n_speed: int = 5,
         max_heading_change_deg: float = 25.0,
-        u_min: float = 5.0,
-        u_max: float = 10.0,
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
+        master_seed: Optional[int] = None,
     ):
         # Create initial environment (case doesn't matter, will be randomized at reset)
         base_env = SingleAgentOwnshipEnv(
@@ -86,10 +85,7 @@ class RandomCaseEnv(gym.Wrapper):
             dt=dt,
             sim_time=sim_time,
             n_heading=n_heading,
-            n_speed=n_speed,
             max_heading_change_deg=max_heading_change_deg,
-            u_min=u_min,
-            u_max=u_max,
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
             seed=None,
@@ -101,12 +97,12 @@ class RandomCaseEnv(gym.Wrapper):
         self.dt = float(dt)
         self.sim_time = float(sim_time)
         self.n_heading = int(n_heading)
-        self.n_speed = int(n_speed)
         self.max_heading_change_deg = float(max_heading_change_deg)
-        self.u_min = float(u_min)
-        self.u_max = float(u_max)
         self.loa_m = float(loa_m)
         self.route_len_nmi = float(route_len_nmi)
+        
+        # Master RNG for reproducible case/seed sequence
+        self.rng = np.random.default_rng(master_seed)
         
         # Tracking for logging
         self.episode_count = 0
@@ -144,13 +140,13 @@ class RandomCaseEnv(gym.Wrapper):
         """
         Reset environment with randomized case and seed.
         
-        Ignores the seed parameter (randomization is internal).
+        Uses master RNG for reproducible case/seed sequence.
         Creates new SingleAgentOwnshipEnv with random case/seed each time.
         Returns observation padded to consistent max size.
         """
-        # Sample random case and seed
-        self.current_case = int(np.random.choice(self.cases_to_train))
-        self.current_seed = int(np.random.randint(0, self.num_seeds))
+        # Sample random case and seed using master RNG
+        self.current_case = int(self.rng.choice(self.cases_to_train))
+        self.current_seed = int(self.rng.integers(0, self.num_seeds))
         
         # Create new environment with random case/seed
         self.env = SingleAgentOwnshipEnv(
@@ -158,10 +154,7 @@ class RandomCaseEnv(gym.Wrapper):
             dt=self.dt,
             sim_time=self.sim_time,
             n_heading=self.n_heading,
-            n_speed=self.n_speed,
             max_heading_change_deg=self.max_heading_change_deg,
-            u_min=self.u_min,
-            u_max=self.u_max,
             loa_m=self.loa_m,
             route_len_nmi=self.route_len_nmi,
             seed=self.current_seed,
@@ -201,3 +194,10 @@ class RandomCaseEnv(gym.Wrapper):
             "cases_available": self.cases_to_train,
             "seed_range": f"[0, {self.num_seeds})",
         }
+    
+    @property
+    def env_multi(self):
+        """Access the wrapped MultiShipParallelEnv for state/history access."""
+        if hasattr(self.env, 'env_multi'):
+            return self.env.env_multi
+        raise RuntimeError("env_multi not accessible: RandomCaseEnv.env may not be SingleAgentOwnshipEnv")

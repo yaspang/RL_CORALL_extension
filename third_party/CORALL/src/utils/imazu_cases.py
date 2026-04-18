@@ -1,123 +1,129 @@
 import numpy as np
 
+NMI = 1852.0
+
 def nautical_to_meters(nm_value):
-    return nm_value * 1852
+    return nm_value * NMI
 
-# Global compression scale: brings obstacles closer while maintaining relative geometry
-# 0.35 scale means a 6 nmi obstacle becomes ~2.1 nmi, 3.4 nmi becomes ~1.2 nmi
-# This creates realistic close-range encounters without extending training time
-GLOBAL_COMPRESSION_SCALE = 0.35
-
+# ---- ORIGINAL CORALL CASES ONLY ----
 obstacle_cases = {
-    # STRONGLY VALID CASES (collision/close encounter)
-    "Case 1": [[[nautical_to_meters(6), nautical_to_meters(0)], 180]],  # Head-on collision - no change
-    
-    # ENHANCED WEAK CASES - adjusted for stronger collision potential
-    # Case 2: was WEAK at 5 nmi heading 90° - move closer and angle for head-on
-    "Case 2": [[[nautical_to_meters(3.5), nautical_to_meters(-1.5)], 135]],  # Closer, diagonal threat
-    
-    # Case 3: was DIVERGING at 3 nmi heading 0° (moving away) - make head-on
-    "Case 3": [[[nautical_to_meters(3.5), nautical_to_meters(0)], 180]],  # Head-on collision
-    
-    # Case 4: was WEAK at 3.44 nmi heading 295° - strengthen heading for crossing
-    "Case 4": [[[nautical_to_meters(3.0), nautical_to_meters(1.0)], 225]],  # Closer, head-on-ish
-    
-    # Case 5: Already has one collision threat - keep as is
-    "Case 5": [[[nautical_to_meters(5), nautical_to_meters(-2.0-0.14)], 90], [[nautical_to_meters(7-0.05), nautical_to_meters(0)], 180]],
-    
-    # Case 6: both WEAK/DIVERGING - strengthen both
-    "Case 6": [[[nautical_to_meters(2.5), nautical_to_meters(-0.8)], 90], [[nautical_to_meters(2.8), nautical_to_meters(-0.2)], 135]],  # Both closer, threatening headings
-    
-    # Case 7: one DIVERGING, one WEAK - strengthen both
-    "Case 7": [[[nautical_to_meters(2.8), nautical_to_meters(0.5)], 180], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 90]],  # Head-on + crossing
-    
-    # Case 8: Already has collision threat - keep as is
-    "Case 8": [[[nautical_to_meters(5), nautical_to_meters(-2.13)], 90], [[nautical_to_meters(7), nautical_to_meters(0)], 180]],
-    
-    # Case 9: both WEAK - move closer and adjust headings
-    "Case 9": [[[nautical_to_meters(2.8), nautical_to_meters(-0.8)], 90], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 135]],  # Both closer, threatening
-    
-    # Case 10: one DIVERGING, one WEAK - strengthen
-    "Case 10": [[[nautical_to_meters(2.5), nautical_to_meters(0.0)], 180], [[nautical_to_meters(2.8), nautical_to_meters(-1.0)], 90]],  # Head-on + crossing
-    
-    # Case 11: both WEAK - strengthen
-    "Case 11": [[[nautical_to_meters(2.5), nautical_to_meters(1.0)], -135], [[nautical_to_meters(2.8), nautical_to_meters(-0.8)], 90]],  # Both threatening
-    
-    # Case 12: Already has collision threat - keep as is
-    "Case 12": [[[nautical_to_meters(7), nautical_to_meters(0)], 180], [[nautical_to_meters(3), nautical_to_meters(0.3+0.05)], -10], [[nautical_to_meters(3.44), nautical_to_meters(-1.55+0.05)], 45]],
-    
-    # Case 13: Already has collision threat - keep as is
-    "Case 13": [[[nautical_to_meters(6), nautical_to_meters(0)], 180], [[nautical_to_meters(3), nautical_to_meters(0.3+0.05)], 350], [[nautical_to_meters(3.4), nautical_to_meters(1.5+0.05)], 295]],
-    
-    # Case 14: all WEAK - strengthen all three
-    "Case 14": [[[nautical_to_meters(2.5), nautical_to_meters(-0.8)], 90], [[nautical_to_meters(2.8), nautical_to_meters(-0.3)], 135], [[nautical_to_meters(2.5), nautical_to_meters(-1.2)], 115]],
-    
-    # Case 15: all WEAK/DIVERGING - strengthen
-    "Case 15": [[[nautical_to_meters(2.8), nautical_to_meters(0.2)], 180], [[nautical_to_meters(2.5), nautical_to_meters(-0.8)], 90], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 135]],
-    
-    # Case 16: all WEAK/DIVERGING - strengthen
-    "Case 16": [[[nautical_to_meters(2.8), nautical_to_meters(0.8)], -90], [[nautical_to_meters(2.5), nautical_to_meters(1.0)], -135], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 90]],
-    
-    # Case 17: all WEAK/DIVERGING - strengthen
-    "Case 17": [[[nautical_to_meters(2.8), nautical_to_meters(0.0)], 180], [[nautical_to_meters(2.5), nautical_to_meters(0.3)], -135], [[nautical_to_meters(2.5), nautical_to_meters(-0.8)], 90]],
-    
-    # Case 18: has MODERATE - improve the moderate one and strengthen weak
-    "Case 18": [[[nautical_to_meters(2.5), nautical_to_meters(-0.3)], 135], [[nautical_to_meters(2.8), nautical_to_meters(-1.0)], 90], [[nautical_to_meters(2.0), nautical_to_meters(-0.8)], 120]],  # All closer, all stronger
-    
-    # Case 19: has MODERATE - similar strengthening
-    "Case 19": [[[nautical_to_meters(2.5), nautical_to_meters(-0.2)], 135], [[nautical_to_meters(2.5), nautical_to_meters(0.2)], -135], [[nautical_to_meters(2.0), nautical_to_meters(-0.8)], 120]],
-    
-    # Case 20: all WEAK/DIVERGING - strengthen
-    "Case 20": [[[nautical_to_meters(2.8), nautical_to_meters(0.0)], 180], [[nautical_to_meters(2.5), nautical_to_meters(-0.3)], 135], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 90]],
-    
-    # Case 21: all DIVERGING (after Agent 3 fix) - strengthen all
-    "Case 21": [[[nautical_to_meters(2.5), nautical_to_meters(-0.2)], 135], [[nautical_to_meters(2.5), nautical_to_meters(0.2)], -135], [[nautical_to_meters(2.5), nautical_to_meters(-0.5)], 90]],  # All closer, all threatening
-    
-    # Case 22: all WEAK/DIVERGING - strengthen
-    "Case 22": [[[nautical_to_meters(2.8), nautical_to_meters(0.0)], 180], [[nautical_to_meters(2.5), nautical_to_meters(-0.8)], 90], [[nautical_to_meters(2.5), nautical_to_meters(-1.0)], 135]],
-    
-    # Case 23: WEAK - strengthen
-    "Case 23": [[[nautical_to_meters(3.0), nautical_to_meters(1.0)], -90]],  # Closer, lateral threat
-    
+    "Case 1": [[[nautical_to_meters(6), nautical_to_meters(0)], 180]],
+    "Case 2": [[[nautical_to_meters(5), nautical_to_meters(-2.14)], 90]],
+    "Case 3": [[[nautical_to_meters(3), nautical_to_meters(0)], 0]],
+    "Case 4": [[[nautical_to_meters(3.44), nautical_to_meters(1.55 + 0.08)], 295]],
+    "Case 5": [[[nautical_to_meters(5), nautical_to_meters(-2.0 - 0.14)], 90],
+               [[nautical_to_meters(7 - 0.05), nautical_to_meters(0)], 180]],
+    "Case 6": [[[nautical_to_meters(3.4), nautical_to_meters(-1.5 + 0.03)], 45],
+               [[nautical_to_meters(3), nautical_to_meters(-0.35 - 0.04)], 10]],
+    "Case 7": [[[nautical_to_meters(3), nautical_to_meters(0)], 0],
+               [[nautical_to_meters(3.4), nautical_to_meters(-1.5 + 0.01)], 45]],
+    "Case 8": [[[nautical_to_meters(5), nautical_to_meters(-2.13)], 90],
+               [[nautical_to_meters(7), nautical_to_meters(0)], 180]],
+    "Case 9": [[[nautical_to_meters(3.4), nautical_to_meters(-1.5 + 0.03)], 45],
+               [[nautical_to_meters(5), nautical_to_meters(-2.1 - 0.05)], 90]],
+    "Case 10": [[[nautical_to_meters(3), nautical_to_meters(0.35)], 350],
+                [[nautical_to_meters(4.4), nautical_to_meters(-2.1 + 0.20)], 90]],
+    "Case 11": [[[nautical_to_meters(5), nautical_to_meters(2.1)], -90],
+                [[nautical_to_meters(3.4), nautical_to_meters(-1.5)], 45]],
+    "Case 12": [[[nautical_to_meters(7), nautical_to_meters(0)], 180],
+                [[nautical_to_meters(3), nautical_to_meters(0.3 + 0.05)], -10],
+                [[nautical_to_meters(3.44), nautical_to_meters(-1.55 + 0.05)], 45]],
+    "Case 13": [[[nautical_to_meters(6), nautical_to_meters(0)], 180],
+                [[nautical_to_meters(3), nautical_to_meters(0.3 + 0.05)], 350],
+                [[nautical_to_meters(3.4), nautical_to_meters(1.5 + 0.05)], 295]],
+    "Case 14": [[[nautical_to_meters(3.4), nautical_to_meters(-1.5)], 45],
+                [[nautical_to_meters(3), nautical_to_meters(-0.4)], 10],
+                [[nautical_to_meters(5), nautical_to_meters(-2.1 - 0.05)], 90]],
+    "Case 15": [[[nautical_to_meters(3), nautical_to_meters(0)], 0],
+                [[nautical_to_meters(3.4), nautical_to_meters(-1.5)], 45],
+                [[nautical_to_meters(5), nautical_to_meters(-2.1 - 0.05)], 90]],
+    "Case 16": [[[nautical_to_meters(3.4), nautical_to_meters(1.5 - 0.03)], -45],
+                [[nautical_to_meters(5), nautical_to_meters(2.1 + 0.04)], -90],
+                [[nautical_to_meters(5), nautical_to_meters(-2.1 - 0.05)], 90]],
+    "Case 17": [[[nautical_to_meters(3), nautical_to_meters(0)], 0],
+                [[nautical_to_meters(3), nautical_to_meters(0.3 + 0.05)], -10],
+                [[nautical_to_meters(3.4), nautical_to_meters(-1.5)], 45]],
+    "Case 18": [[[nautical_to_meters(3.3), nautical_to_meters(-0.3 - 0.1)], 10],
+                [[nautical_to_meters(3.4), nautical_to_meters(-1.5 + 0.05)], 45],
+                [[nautical_to_meters(6.5), nautical_to_meters(-1.5)], 135]],
+    "Case 19": [[[nautical_to_meters(3), nautical_to_meters(-0.3 - 0.07)], 10],
+                [[nautical_to_meters(3), nautical_to_meters(0.3 + 0.05)], -10],
+                [[nautical_to_meters(6.5), nautical_to_meters(-1.5 - 0.03)], 135]],
+    "Case 20": [[[nautical_to_meters(3), nautical_to_meters(0)], 0],
+                [[nautical_to_meters(3), nautical_to_meters(-0.3 - 0.05)], 10],
+                [[nautical_to_meters(4.4), nautical_to_meters(-2.1 + 0.25)], 90]],
+    "Case 21": [[[nautical_to_meters(3 - 0.3), nautical_to_meters(-0.3 - 0.05)], 10],
+                [[nautical_to_meters(3 - 0.3), nautical_to_meters(0.3 + 0.02)], -10],
+                [[nautical_to_meters(4.4), nautical_to_meters(-1.9)], 90]],
+    "Case 22": [[[nautical_to_meters(3), nautical_to_meters(0)], 0],
+                [[nautical_to_meters(3.94), nautical_to_meters(-1.6 - 0.13)], 45],
+                [[nautical_to_meters(5), nautical_to_meters(-2.01 - 0.15)], 90]],
+    "Case 23": [[[nautical_to_meters(4.243), nautical_to_meters(2.243)], -75]],
 }
 
-# Function to get obstacles for a specific case
 def get_obstacles(case_number):
-    case_key = f"Case {case_number}"
-    return obstacle_cases.get(case_key, [])
+    return obstacle_cases.get(f"Case {case_number}", [])
 
+def line_cross_x_on_ownship(x0_m, y0_m, psi_rad):
+    """
+    Compute x-location where a target's infinite straight-line path intersects
+    ownship centerline y=0. Returns np.nan if there is no useful crossing.
+    """
+    s = np.sin(psi_rad)
+    c = np.cos(psi_rad)
 
-def get_obstacle_data(case_number):
+    # Parallel to x-axis
+    if abs(s) < 1e-10:
+        # If already on centerline, treat current x as representative
+        if abs(y0_m) < 1e-6:
+            return x0_m
+        return np.nan
+
+    tau = -y0_m / s  # path parameter to y=0 crossing
+    x_cross = x0_m + tau * c
+
+    # We only want future/meaningful crossings ahead of ownship
+    if x_cross <= 0.0:
+        return np.nan
+    return x_cross
+
+def compute_case_scale(obstacles, desired_cross_x_nmi=1.0, min_scale=0.18, max_scale=0.45):
     """
-    Convert obstacle case data to simulation format
-    Args:
-        case_number (int): The case number to use (1-22)
-    Returns:
-        Xob, Yob (lists): X and Y positions in meters
-        Vob (list): Velocities in m/s 
-        psiob (numpy array): Angles in radians
+    Choose ONE scale factor per case so the encounter cluster lands near the middle
+    of a 2 nmi route.
     """
-    # Get obstacle data for the case
+    xs = []
+    for obs in obstacles:
+        (x0_m, y0_m), ang_deg = obs
+        psi = np.radians(ang_deg)
+        x_cross = line_cross_x_on_ownship(x0_m, y0_m, psi)
+        if np.isfinite(x_cross):
+            xs.append(x_cross / NMI)
+
+    # Fallback: use median radial distance if no line-crossing is found
+    if not xs:
+        rs = [np.hypot(obs[0][0], obs[0][1]) / NMI for obs in obstacles]
+        rep = np.median(rs) if rs else 4.0
+    else:
+        rep = np.median(xs)
+
+    scale = desired_cross_x_nmi / max(rep, 1e-6)
+    return float(np.clip(scale, min_scale, max_scale))
+
+def get_obstacle_data(case_number, desired_cross_x_nmi=1.0, target_speed_mps=10.0):
+    """
+    Return geometry-preserving scaled obstacle data for short-route training.
+    """
     obstacles = get_obstacles(case_number)
-    
-    # Initialize empty lists
-    Xob = []
-    Yob = []
-    psiob = []
-    
-    # Default velocity: 18.52 m/s (~10 knots) for all obstacles
-    # Creates list [18.52, 18.52, ...] with one value per obstacle (NOT product)
-    Vob = [18.52] * len(obstacles)
-    
-    # Extract positions and angles from obstacles
-    for obstacle in obstacles:
-        position = obstacle[0]  # Get [x,y] position
-        angle = obstacle[1]    # Get angle in degrees
-        
-        # Apply global compression scale to bring obstacles closer (maintains geometry)
-        Xob.append(position[0] * GLOBAL_COMPRESSION_SCALE)
-        Yob.append(position[1] * GLOBAL_COMPRESSION_SCALE)
-        psiob.append(np.radians(angle))  # Convert angle to radians
-    
-    return Xob, Yob, Vob, np.array(psiob)
 
+    Xob, Yob, psiob = [], [], []
+    scale = compute_case_scale(obstacles, desired_cross_x_nmi=desired_cross_x_nmi)
+
+    for obs in obstacles:
+        (x0_m, y0_m), ang_deg = obs
+        Xob.append(scale * x0_m)
+        Yob.append(scale * y0_m)
+        psiob.append(np.radians(ang_deg))  # KEEP ORIGINAL HEADING
+
+    Vob = [target_speed_mps] * len(obstacles)
+    return Xob, Yob, Vob, np.array(psiob)

@@ -43,41 +43,80 @@ import numpy as np
 import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
+from stable_baselines3.common.monitor import Monitor
 
 from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
 
 
 class GeneralizedTrainingMetricsCallback(BaseCallback):
-    """Track training metrics across all cases."""
+    """Track training metrics using SB3's Monitor wrapper and logger."""
     
     def __init__(self, verbose=1):
         super().__init__(verbose)
         self.verbose = verbose
-        self.episode_rewards = []
-        self.episode_cases = []
-        self.episode_seeds = []
         self.timesteps = []
         self.mean_returns = []
+        self.episode_counter = 0
     
     def _on_step(self) -> bool:
         """Called after each environment step."""
-        # Log every 5000 steps
+        # Log every 5000 steps by querying the model's logger
         if self.num_timesteps % 5000 == 0 and self.num_timesteps > 0:
-            if hasattr(self.model.logger, 'name_to_value'):
-                mean_reward = self.model.logger.name_to_value.get('rollout/ep_rew_mean', 0.0)
-                self.timesteps.append(self.num_timesteps)
-                self.mean_returns.append(mean_reward)
-                if self.verbose:
-                    print(f"[Step {self.num_timesteps:7d}] Mean Ep Return: {mean_reward:8.2f}")
+            mean_reward = self._get_mean_episode_return()
+            
+            self.timesteps.append(self.num_timesteps)
+            self.mean_returns.append(mean_reward)
+            
+            if self.verbose:
+                print(f"[Step {self.num_timesteps:7d}] Mean Episode Return: {mean_reward:10.2f}")
         
         return True
     
+    def _get_mean_episode_return(self) -> float:
+        """Extract mean episode return from SB3's logger."""
+        try:
+            # For PPO, the key is 'rollout/ep_rew_mean' or sometimes 'rollout/ep_mean_reward'
+            if hasattr(self.model, 'logger') and self.model.logger is not None:
+                logger_dict = self.model.logger.name_to_value
+                
+                # Try multiple possible keys
+                for key in ['rollout/ep_rew_mean', 'rollout/ep_mean_reward', 'ep_rew_mean']:
+                    if key in logger_dict:
+                        val = float(logger_dict.get(key, 0.0))
+                        if val != 0.0:  # Only return if non-zero
+                            return val
+            
+            # Fallback: return 0
+            return 0.0
+        except Exception as e:
+            if self.verbose:
+                print(f"  [Warning] Could not retrieve mean reward from logger: {e}")
+            return 0.0
+    
     def _on_training_end(self) -> None:
         """Called when training finishes."""
-        print("\n[Training Complete]")
-        if self.verbose and hasattr(self.model.logger, 'name_to_value'):
-            final_mean = self.model.logger.name_to_value.get('rollout/ep_rew_mean', 0.0)
-            print(f"Final Mean Episode Return: {final_mean:.2f}")
+        print("\n" + "=" * 80)
+        print("TRAINING COMPLETE - CONVERGENCE METRICS")
+        print("=" * 80)
+        
+        if self.mean_returns:
+            valid_returns = [r for r in self.mean_returns if r != 0.0]
+            if valid_returns:
+                print(f"\nEpisode Return Statistics (from {len(valid_returns)} non-zero checkpoints):")
+                print(f"  Final return:    {valid_returns[-1]:10.2f}")
+                print(f"  Best return:     {np.max(valid_returns):10.2f}")
+                print(f"  Mean return:     {np.mean(valid_returns):10.2f}")
+                print(f"  Std return:      {np.std(valid_returns):10.2f}")
+            else:
+                print("\n⚠️  WARNING: No non-zero episode returns logged during training!")
+                print("    This may indicate a logging issue. Check:")
+                print("    1. Is the environment properly wrapped with Monitor()?")
+                print("    2. Are episodes actually completing during training?")
+                print("    3. Check SB3 logger keys with: model.logger.name_to_value.keys()")
+        else:
+            print("\n⚠️  WARNING: No metrics were logged during training!")
+        
+        print("=" * 80 + "\n")
 
 
 def create_output_dir(timestamp: str) -> Path:
@@ -144,6 +183,8 @@ def main():
                         help="MLP hidden layer sizes (default: 128 128)")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed (default: 0)")
+    parser.add_argument("--master_seed", type=int, default=None,
+                        help="Master seed for reproducible case/seed sequence (default: None = random)")
     parser.add_argument("--cases", type=int, nargs="+", default=[1, 6, 21],
                         help="Cases to train on (default: 1 6 21, use --cases 1 2 3 ... 23 for all)")
     
@@ -161,26 +202,30 @@ def main():
     print(f"  Checkpoint freq:    {args.checkpoint_freq:,}")
     print(f"  Parallel workers:   {args.num_workers}")
     print(f"  Learning rate:      {args.lr}")
+    print(f"  Master seed:        {args.master_seed if args.master_seed is not None else 'random'}")
     print(f"  MLP architecture:   {args.mlp_hiddens}")
     print(f"\nOutput directory:     {output_dir}")
     print(f"Timestamp:            {timestamp}")
     print("=" * 80 + "\n")
     
+    model = None  # Initialize to handle potential unbound errors in exception handlers
+    
     try:
-        # Create environment (will randomize case/seed at each reset)
+        # Create environment (will randomize case/seed at each reset with reproducible sequence)
         env = RandomCaseEnv(
             cases_to_train=args.cases,
             num_seeds=100,
             dt=0.5,
             sim_time=1950.0,
             n_heading=7,
-            n_speed=5,
             max_heading_change_deg=25.0,
-            u_min=5.0,
-            u_max=10.0,
             loa_m=30.0,
             route_len_nmi=2.0,
+            master_seed=args.master_seed,
         )
+        
+        # Wrap with Monitor for proper episode return tracking
+        env = Monitor(env)
         
         obs_space = env.observation_space
         act_space = env.action_space
@@ -286,12 +331,13 @@ def main():
     except KeyboardInterrupt:
         print("\n[Training interrupted by user]")
         # Save current model if possible
-        try:
-            interrupted_path = output_dir / "interrupted_checkpoint.zip"
-            model.save(str(interrupted_path))
-            print(f"Saved interrupted checkpoint to: {interrupted_path}")
-        except:
-            pass
+        if model is not None:
+            try:
+                interrupted_path = output_dir / "interrupted_checkpoint.zip"
+                model.save(str(interrupted_path))
+                print(f"Saved interrupted checkpoint to: {interrupted_path}")
+            except:
+                pass
         raise
     except Exception as e:
         print(f"\n[ERROR] {e}")

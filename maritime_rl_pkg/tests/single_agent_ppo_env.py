@@ -28,7 +28,7 @@ from core.integration import integration
 from navigation.obstacle_sim import obstacle_sim
 from risk_assessment.cpa_calculations import cpa_calculations
 from risk_assessment.risk_calculations import risk_calculations
-from utils.imazu_cases import get_obstacle_data
+from utils.imazu_cases_old import get_obstacle_data
 
 
 class CORALL_ReactiveAvoidanceGymEnv(gym.Env):

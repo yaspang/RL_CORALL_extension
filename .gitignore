@@ -208,6 +208,53 @@ __marimo__/
 
 # RL / ML artifacts
 runs/
+
+# RL-CORALL Training and Evaluation Artifacts
+# Training checkpoints and logs (large, can be regenerated)
+GENERALIZED_SB3_*/
+SINGLE_AGENT_SB3_*/
+MULTI_AGENT_PPO_*/
+
+# Policy evaluation results (large episode histories)
+policy_eval_*/
+policy_train_*/
+
+# Episode recordings and animations
+*.gif
+*.mp4
+
+# Case-specific training outputs
+case_*/
+
+# Comparison results (keep CSV summaries, ignore large files)
+comparison_results/**/*.npz
+comparison_results/**/*.pkl
+
+# Visualizations (intermediate)
+Preliminary_Visualizations/**/
+**/*.png  # Exclude generated plots, but keep .md documentation with images
+
+# Large data files
+*.npz
+*.pkl
+*.pickle
+*.joblib
+
+# Experiment tracking
+runs/
+logs/
+tensorboard/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
 logs/
 checkpoints/
 models/

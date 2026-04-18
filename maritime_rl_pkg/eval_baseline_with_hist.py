@@ -91,8 +91,8 @@ def run_one_episode_baseline(env_creator, seed, args, capture_history=False):
     
     while (not done) and (step_count < max_steps):
         # CORALL baseline: environment ignores action and uses internal CORALL guidance
-        # Just pass dummy action for the required agent
-        actions = {"ship_0": np.array([0.0], dtype=np.float32)}
+        # Just pass dummy action for the required agent (Discrete(1) action space)
+        actions = {"ship_0": 0}
 
         obs, rewards, terminations, truncations, infos = env.step(actions)
         step_count += 1
