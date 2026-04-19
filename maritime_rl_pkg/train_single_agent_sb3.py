@@ -205,8 +205,10 @@ def plot_training_curves(model, eval_log_dir, output_dir):
     plt.tight_layout()
     
     plot_path = output_dir / "training_return.png"
-    plt.savefig(str(plot_path), dpi=150)
-    print(f"✓ Convergence plot saved to: {plot_path}")
+    plt.savefig(str(plot_path), dpi=300, format='png')
+    pdf_plot_path = output_dir / "training_return.pdf"
+    plt.savefig(str(pdf_plot_path), format='pdf')
+    print(f"✓ Convergence plot saved to: {plot_path} and {pdf_plot_path}")
     
     plt.close()
 

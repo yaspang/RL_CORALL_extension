@@ -322,8 +322,8 @@ def run_simulation(args=None, return_data=False):
 
             # Save animation plots
             plt.title(f'Case {args.case_number}', fontsize=25)
-            plt.savefig(f'{args.output_dir}/simulation_result{args.case_number}.eps', format='eps')
-            plt.savefig(f'{args.output_dir}/simulation_result{args.case_number}.png')
+            plt.savefig(f'{args.output_dir}/simulation_result{args.case_number}.pdf', format='pdf')
+            plt.savefig(f'{args.output_dir}/simulation_result{args.case_number}.png', dpi=300, format='png')
             plt.show(block=True)
     else:
         # Run simulation without animation
@@ -464,8 +464,8 @@ def run_simulation(args=None, return_data=False):
 
     fig.suptitle(f'Case {args.case_number}', fontsize=20)
     plt.tight_layout()
-    plt.savefig(f'{args.output_dir}/plot_dcpa_tcpa_risk_{args.case_number}.eps', format='eps')
-    plt.savefig(f'{args.output_dir}/plot_dcpa_tcpa_risk_{args.case_number}.png')
+    plt.savefig(f'{args.output_dir}/plot_dcpa_tcpa_risk_{args.case_number}.pdf', format='pdf')
+    plt.savefig(f'{args.output_dir}/plot_dcpa_tcpa_risk_{args.case_number}.png', dpi=300, format='png')
     plt.show()
 
     # Return data if requested (for comparison mode)
@@ -507,7 +507,8 @@ def run_simulation(args=None, return_data=False):
     plt.xlabel('Time (s)')
     plt.ylabel(r'$K_{dir}$')
     plt.grid(True)
-    plt.savefig(f'{args.output_dir}/plot_kdir_{args.case_number}.png', dpi=300)
+    plt.savefig(f'{args.output_dir}/plot_kdir_{args.case_number}.pdf', format='pdf')
+    plt.savefig(f'{args.output_dir}/plot_kdir_{args.case_number}.png', dpi=300, format='png')
     plt.show()"""
 
 if __name__ == "__main__":

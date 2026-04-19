@@ -345,9 +345,10 @@ def create_bar_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
@@ -382,9 +383,10 @@ def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
@@ -419,9 +421,10 @@ def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
@@ -457,9 +460,10 @@ def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path):
@@ -493,9 +497,10 @@ def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path)
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
@@ -539,9 +544,10 @@ def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path)
     ax.grid(axis='y', alpha=0.3)
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
@@ -743,9 +749,10 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     
     fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count\n(Top: Efficiency | Bottom: Collision Avoidance & Risk)', 
                 fontsize=14, fontweight='bold', y=0.997)
-    fig.savefig(output_path, dpi=200, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name}")
+    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
 
 
 def main():

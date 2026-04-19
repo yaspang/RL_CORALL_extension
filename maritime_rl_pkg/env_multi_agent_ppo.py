@@ -28,7 +28,7 @@ from .path_setup import ensure_paths
 ensure_paths()
 
 # importing CORALL core modules (from repo)
-from utils.imazu_cases_old import get_obstacle_data
+from utils.imazu_cases import get_obstacle_data
 from navigation.planning import waypoint_selection, planning
 from dynamics.controller import controller
 from dynamics.actuator_modeling import actuator_modeling 
@@ -107,6 +107,11 @@ class MultiShipParallelEnv(ParallelEnv):
         enable_aabb_filtering: bool = False,
         aabb_radius_m: float = 1500.0,
         seed: Optional[int] = None,
+        
+        # Geometry parameters for encounter placement and speeds
+        desired_cross_x_nmi: float = 1.0,
+        target_speed_mps: float = 10.0,
+        ownship_speed_mps: Optional[float] = None,
     ): 
 
         super().__init__()
@@ -130,9 +135,24 @@ class MultiShipParallelEnv(ParallelEnv):
         self.rng = np.random.default_rng(seed)
 
         # determine number of agents from CORALL case
-        Xob, Yob, Vob, psiob = get_obstacle_data(self.case_number)
+        # Pass geometry parameters to customize encounter placement and speeds
+        Xob, Yob, Vob, psiob = get_obstacle_data(
+            self.case_number,
+            desired_cross_x_nmi=desired_cross_x_nmi,
+            target_speed_mps=target_speed_mps,
+            ownship_speed_mps=ownship_speed_mps,
+            synchronize_arrivals=True,
+            min_speed_mps=6.0,
+            max_speed_mps=14.0,
+        )
         self.n_obstacles = len(Xob)
         self.n_agents = 1 + self.n_obstacles
+        
+        # Store obstacle data for later use in init_from_case()
+        self._case_cache = {"Xob": Xob, "Yob": Yob, "Vob": Vob, "psiob": psiob}
+        
+        # Override ownship speed if specified, otherwise will inherit from first obstacle in init_from_case()
+        self.ownship_speed_mps_override = ownship_speed_mps
     
         self.agents = [f"ship_{i}" for i in range(self.n_agents)]
         self.possible_agents = self.agents[:]
@@ -246,7 +266,11 @@ class MultiShipParallelEnv(ParallelEnv):
         ## (for more consistent dynamics across cases and easier learning)
 
         # Ownship uses first obstacle velocity as cruise speed (or default 9.5 m/s)
-        if len(Vob) > 0:
+        if self.ownship_speed_mps_override is not None:
+            # Use overridden ownship speed if provided
+            u0 = float(self.ownship_speed_mps_override)
+        elif len(Vob) > 0:
+            # Otherwise inherit from first obstacle
             u0 = float(Vob[0])
         else:
             u0 = 9.5  # Default cruise speed in m/s
@@ -254,44 +278,23 @@ class MultiShipParallelEnv(ParallelEnv):
         self.u_des_all[0] = u0
         X_all[0, :] = np.array([0.0, 0.0, 0.0, 0.0, 0.0, u0], dtype=float)
 
-        # Target ship initial states - apply per-case scaling to encounter difficulty
-        # Per-case difficulty scaling: now unified at 1.0 since global compression scale (0.35)
-        # is applied in imazu_cases.py to all cases, bringing obstacles to realistic close range.
-        # All cases now uniformly compressed while preserving relative geometry and crossing angles.
-        case_scales = {1: 1.0, 6: 1.0, 21: 1.0}
-        scenario_scale = case_scales.get(self.case_number, 1.0)
-        
         # Predicted intercept point for waypoint-based navigation (obstacles navigate here)
         route_len_nmi = float(self.route_len_nmi)
-        intercept_x_nmi = route_len_nmi / 2.0
         
         for j in range(self.n_obstacles):
             u_j = float(Vob[j])
             self.u_des_all[j + 1] = u_j
-            
-            # Apply scaling to obstacle positions (ownship remains at origin)
-            x_obs_m = float(Xob[j] * scenario_scale)
-            y_obs_m = float(Yob[j] * scenario_scale)
-            
-            # CRITICAL FIX: Set heading DIRECTLY TOWARD OWNSHIP (at origin 0,0)
-            # This creates true head-on collision courses for realistic training
-            # Ownship is always at origin, so vector is simply (0 - x_obs, 0 - y_obs)
-            
-            x_obs_nmi = x_obs_m / NMI
-            y_obs_nmi = y_obs_m / NMI
-            
-            # Vector from obstacle to ownship (at origin)
-            dx_to_ownship = 0.0 - x_obs_nmi  # -x_obs
-            dy_to_ownship = 0.0 - y_obs_nmi  # -y_obs
-            
-            if abs(dx_to_ownship) < 1e-9 and abs(dy_to_ownship) < 1e-9:
-                # Obstacle at same position as ownship (degenerate case)
-                psi_init = 0.0
-            else:
-                # Heading that points directly at ownship
-                psi_init = float(np.arctan2(dy_to_ownship, dx_to_ownship))
-            
-            X_all[j + 1, :] = np.array([x_obs_m, y_obs_m, psi_init, 0.0, 0.0, u_j], dtype=float)
+
+            x_obs_m = float(Xob[j])
+            y_obs_m = float(Yob[j])
+
+            # original imazu headings
+            psi_init = float(psiob[j])
+
+            X_all[j + 1, :] = np.array(
+                [x_obs_m, y_obs_m, psi_init, 0.0, 0.0, u_j],
+                dtype=float
+            )
 
         return X_all
 
@@ -303,10 +306,6 @@ class MultiShipParallelEnv(ParallelEnv):
             waypoint 0 = initial position
             waypoint 1 = far point along intended route
 
-        CRITICAL FIX (2026-04-16):
-        - Ownship (agent 0): navigates forward along initial heading (collision avoidance target)
-        - Obstacles (agents 1+): all navigate toward a common PREDICTED INTERCEPT POINT at scenario center
-          This creates geometric convergence (CORALL-style collision geometry) where all ships converge
         """
         # List over ships -> list over consecutive waypoint coordinates
         Xwpt_all: List[List[float]] = []
@@ -327,25 +326,13 @@ class MultiShipParallelEnv(ParallelEnv):
             x0_nmi = x_m / NMI
             y0_nmi = y_m / NMI
 
-            if k == 0:
-                # Ownship (agent 0): navigate forward along initial heading (straight line forward)
-                heading_to_use = psi
-            else:
-                # Obstacles (agents 1+): compute bearing toward PREDICTED INTERCEPT POINT
-                # All obstacles converge at the same engagement zone (center)
-                intercept_y_nmi = 0.0
-                dx_to_intercept = intercept_x_nmi - x0_nmi
-                dy_to_intercept = intercept_y_nmi - y0_nmi
-                
-                if abs(dx_to_intercept) < 1e-9 and abs(dy_to_intercept) < 1e-9:
-                    # Obstacle already at intercept point, use initial heading
-                    heading_to_use = psi
-                else:
-                    # Bearing toward predicted intercept location (creates geometric convergence)
-                    heading_to_use = float(np.arctan2(dy_to_intercept, dx_to_intercept))
+            # all ships use current / original heading
+            heading = psi
+            x1_nmi = x0_nmi + route_len_nmi * float(np.cos(heading))
+            y1_nmi = y0_nmi + route_len_nmi * float(np.sin(heading))
             
-            x1_nmi = x0_nmi + route_len_nmi * float(np.cos(heading_to_use))
-            y1_nmi = y0_nmi + route_len_nmi * float(np.sin(heading_to_use))
+            x1_nmi = x0_nmi + route_len_nmi * float(np.cos(heading))
+            y1_nmi = y0_nmi + route_len_nmi * float(np.sin(heading))
 
             Xwpt_all.append([x0_nmi, x1_nmi])
             Ywpt_all.append([y0_nmi, y1_nmi])
@@ -833,12 +820,14 @@ class MultiShipParallelEnv(ParallelEnv):
                 
                 # SPARSE REWARD ONLY: Delta progress for milestone rewards
                 # Avoid continuous progress reward - it competes with risk penalty and causes aggressive behavior
-                w_along = 1.0
+                w_along = 10.0
                 r_along = w_along * delta_progress                
             else:
                 # Agent already reached goal - no waypoint following reward
                 r_along = 0.0
                 r_cross = 0.0
+
+            total += r_along
 
             # risk penalty: discourage large collision risk with any other vessel
             agent_risks = pair_risk[k].copy()
@@ -846,7 +835,7 @@ class MultiShipParallelEnv(ParallelEnv):
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
             
-            w_risk = -30.0
+            w_risk = -50.0
             total += w_risk * max_risk
         
 
@@ -872,17 +861,17 @@ class MultiShipParallelEnv(ParallelEnv):
             # separation margin reward: bonus to maintain safe distance
             safe_dist_m = LOA * 3.0
             min_dist = float(np.min(pair_dist[k][np.isfinite(pair_dist[k])])) if np.any(np.isfinite(pair_dist[k])) else np.inf
-            if min_dist > safe_dist_m: 
-                # good distance maintained -> reward
-                w_safe = 10.0
-                r_separation = w_safe * (1.0 - (min_dist - safe_dist_m) / 5000.0)
+
+            # Keep this term weak so it does not dominate episode return.
+            if min_dist > safe_dist_m:
+                w_safe = 0.5
+                frac = 1.0 - (min_dist - safe_dist_m) / 5000.0
+                r_separation = w_safe * float(np.clip(frac, 0.0, 1.0))
                 total += r_separation
             elif min_dist > LOA and min_dist <= safe_dist_m:
-                # Warning zone: penalty scales with proximity
-                w_warning = -15.0
+                w_warning = -2.0
                 r_separation = w_warning * (1.0 - (min_dist - LOA) / safe_dist_m)
                 total += r_separation
-
                         
             # Collision penalty: large negative reward for actual collision
             # If any collision occurred this step, apply heavy penalty 
@@ -893,9 +882,11 @@ class MultiShipParallelEnv(ParallelEnv):
                 if self.episode_metrics[agent]["collision"] == 0:
                     self.episode_metrics[agent]["collision"] = 1
             
-            # COLLISION PENALTY: Large negative reward for actual collision
+            # COLLISION PENALTY (OPTION 1 + 2): High penalty + prevent success bonus
+            # Option 1: Increase penalty to -500 (was -200) to make collision 2.5x costlier than success
+            # Option 2: Only grant success if NO collision occurred during episode
             if collision:
-                w_collision = -200.0  # Massive penalty for collision
+                w_collision = -1000.0  # Massively penalize collision to incentivize avoidance
                 total += w_collision
             
             
@@ -927,12 +918,22 @@ class MultiShipParallelEnv(ParallelEnv):
 
             w_success = 200.0
 
+            # OPTION 2: Only grant success bonus if NO collision occurred during entire episode
+            # This ensures agent learns to prioritize avoidance over reaching goal
             if final_reached:
-                # Track agent success in infos
-                infos[agent]["success"] = True
-                total += w_success  # ENABLED: reward agents for reaching destination
-                self.episode_metrics[agent]["success"] = 1
-                self.episode_metrics[agent]["goal_passed"] = 1
+                # Check if any collision occurred during this episode
+                episode_had_collision = (self.episode_metrics[agent]["collision"] == 1)
+                
+                if not episode_had_collision:
+                    # Success! Reached goal safely without collision
+                    infos[agent]["success"] = True
+                    total += w_success  # Reward agents for reaching destination safely
+                    self.episode_metrics[agent]["success"] = 1
+                    self.episode_metrics[agent]["goal_passed"] = 1
+                else:
+                    # Reached goal but had collision(s) - no success bonus
+                    infos[agent]["success"] = False
+                    self.episode_metrics[agent]["goal_passed"] = 1  # Mark passed but not truly successful
                 
                 # Mark agent as reached goal - stop collecting metrics for this agent
                 self.agent_reached_goal[agent] = True

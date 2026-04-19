@@ -60,13 +60,13 @@ class SingleAgentOwnshipEnv(gym.Env):
     
     2. Obstacles (agents 1...K): Scripted (not learned)
        - Always maintain constant heading and speed (center actions)
-       - Head toward ownship from initial Imazu case geometry
-       - Uniform speed: 9.5 m/s (normalized across all cases)
+       - Preserve original Imazu case headings and speeds
+       - Uniform propagation: constant velocity at fixed heading
     
-    3. Geometry (per-case scaling applied in MultiShipParallelEnv.init_from_case):
-       - Each case has different target distance scaling
-       - Affects difficulty: Case 1 (loose) → Case 6 (medium) → Case 21 (tight)
-       - Ownship always at origin; obstacles scaled around it
+    3. Geometry (defined in MultiShipParallelEnv):
+       - Ownship always starts at origin
+       - Obstacles placed at original Imazu positions with original headings
+       - No per-case scaling; full original geometry preserved
     
     4. Reward function (from MultiShipParallelEnv):
        - Collision penalty: -10 if any agent separation < LOA
@@ -104,6 +104,10 @@ class SingleAgentOwnshipEnv(gym.Env):
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
         seed: Optional[int] = None,
+        # Geometry parameters
+        desired_cross_x_nmi: float = 1.0,
+        target_speed_mps: float = 10.0,
+        ownship_speed_mps: Optional[float] = None,
     ):
         super().__init__()
         
@@ -123,6 +127,9 @@ class SingleAgentOwnshipEnv(gym.Env):
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
             seed=seed,
+            desired_cross_x_nmi=desired_cross_x_nmi,
+            target_speed_mps=target_speed_mps,
+            ownship_speed_mps=ownship_speed_mps,
         )
         
         # Single-agent action/observation spaces (only for ownship)

@@ -68,12 +68,12 @@ def plot_kdir_comparison(time_baseline: List[float],
     # Save plot
     filename = f'kdir_comparison_{llm_provider.lower()}_case_{case_number}.png'
     filepath = os.path.join(output_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.savefig(filepath, dpi=300, bbox_inches='tight', facecolor='white', format='png')
     
-    # Also save as EPS
-    eps_filename = f'kdir_comparison_{llm_provider.lower()}_case_{case_number}.eps'
-    eps_filepath = os.path.join(output_dir, eps_filename)
-    plt.savefig(eps_filepath, format='eps', bbox_inches='tight', facecolor='white')
+    # Also save as PDF (vector format for publication quality)
+    pdf_filename = f'kdir_comparison_{llm_provider.lower()}_case_{case_number}.pdf'
+    pdf_filepath = os.path.join(output_dir, pdf_filename)
+    plt.savefig(pdf_filepath, format='pdf', bbox_inches='tight', facecolor='white')
     
     plt.show()
     

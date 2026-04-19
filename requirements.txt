@@ -15,6 +15,11 @@ pettingzoo
 torch
 
 # ===============================
+# Reinforcement Learning
+# ===============================
+stable-baselines3
+
+# ===============================
 # Ray + RLlib (MAPPO included)
 # ===============================
 ray[rllib]

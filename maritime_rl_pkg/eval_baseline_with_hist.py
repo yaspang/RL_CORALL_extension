@@ -20,6 +20,9 @@ def parse_args():
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
     p.add_argument("--save_histories", action="store_true", help="Save per-step state histories for all episodes")
     p.add_argument("--save_first_history", action="store_true", help="Save only the first episode history (useful for overlay figures)")
+    p.add_argument("--desired_cross_x_nmi", type=float, default=1.0)
+    p.add_argument("--target_speed_mps", type=float, default=10.0)
+    p.add_argument("--ownship_speed_mps", type=float, default=None)
     return p.parse_args()
 
 
@@ -32,13 +35,15 @@ def build_env_creator(args):
     from maritime_rl_pkg.env_baseline import CORALLComparisonEnv
 
     def env_creator(config):
-        return CORALLComparisonEnv(
+        CORALLComparisonEnv(
             case_number=config.get("case_number", args.case),
             dt=config.get("dt", args.dt),
             sim_time=config.get("sim_time", args.sim_time),
             route_len_nmi=config.get("route_len_nmi", args.route_len_nmi),
-            render_mode="human" if args.render else None, 
             seed=config.get("seed", args.seed),
+            desired_cross_x_nmi=config.get("desired_cross_x_nmi", args.desired_cross_x_nmi),
+            target_speed_mps=config.get("target_speed_mps", args.target_speed_mps),
+            ownship_speed_mps=config.get("ownship_speed_mps", args.ownship_speed_mps),
         )
     return env_creator
 

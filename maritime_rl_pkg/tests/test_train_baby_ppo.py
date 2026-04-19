@@ -333,7 +333,8 @@ def save_training_plots(log_dir: str, reward_callback: RewardLoggingCallback):
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(log_dir / "training_episode_return.png", dpi=150)
+        plt.savefig(log_dir / "training_episode_return.png", dpi=300, format='png')
+        plt.savefig(log_dir / "training_episode_return.pdf", format='pdf')
         plt.close()
 
     # --- Plot 2: Monitor-based reward history
@@ -353,7 +354,8 @@ def save_training_plots(log_dir: str, reward_callback: RewardLoggingCallback):
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(log_dir / "monitor_episode_return.png", dpi=150)
+        plt.savefig(log_dir / "monitor_episode_return.png", dpi=300, format='png')
+        plt.savefig(log_dir / "monitor_episode_return.pdf", format='pdf')
         plt.close()
     except Exception as e:
         print(f"[warn] could not load monitor results for plotting: {e}")

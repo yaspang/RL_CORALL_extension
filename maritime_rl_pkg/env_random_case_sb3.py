@@ -78,6 +78,9 @@ class RandomCaseEnv(gym.Wrapper):
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
         master_seed: Optional[int] = None,
+        desired_cross_x_nmi: float = 1.0,
+        target_speed_mps: float = 10.0,
+        ownship_speed_mps: Optional[float] = None,
     ):
         # Create initial environment (case doesn't matter, will be randomized at reset)
         base_env = SingleAgentOwnshipEnv(
@@ -89,6 +92,9 @@ class RandomCaseEnv(gym.Wrapper):
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
             seed=None,
+            desired_cross_x_nmi=desired_cross_x_nmi,
+            target_speed_mps=target_speed_mps,
+            ownship_speed_mps=ownship_speed_mps,
         )
         super().__init__(base_env)
         
@@ -100,6 +106,9 @@ class RandomCaseEnv(gym.Wrapper):
         self.max_heading_change_deg = float(max_heading_change_deg)
         self.loa_m = float(loa_m)
         self.route_len_nmi = float(route_len_nmi)
+        self.desired_cross_x_nmi = float(desired_cross_x_nmi)
+        self.target_speed_mps = float(target_speed_mps)
+        self.ownship_speed_mps = ownship_speed_mps if ownship_speed_mps is None else float(ownship_speed_mps)
         
         # Master RNG for reproducible case/seed sequence
         self.rng = np.random.default_rng(master_seed)
@@ -144,11 +153,17 @@ class RandomCaseEnv(gym.Wrapper):
         Creates new SingleAgentOwnshipEnv with random case/seed each time.
         Returns observation padded to consistent max size.
         """
-        # Sample random case and seed using master RNG
-        self.current_case = int(self.rng.choice(self.cases_to_train))
-        self.current_seed = int(self.rng.integers(0, self.num_seeds))
+        # Use provided seed or master RNG for case/seed sequence
+        if seed is not None:
+            local_rng = np.random.default_rng(seed)
+        else:
+            local_rng = self.rng
+
+        # Sample random case and seed
+        self.current_case = int(local_rng.choice(self.cases_to_train))
+        self.current_seed = int(local_rng.integers(0, self.num_seeds))
         
-        # Create new environment with random case/seed
+        # Create new environment with random case/seed and geometry parameters
         self.env = SingleAgentOwnshipEnv(
             case_number=self.current_case,
             dt=self.dt,
@@ -158,21 +173,22 @@ class RandomCaseEnv(gym.Wrapper):
             loa_m=self.loa_m,
             route_len_nmi=self.route_len_nmi,
             seed=self.current_seed,
+            desired_cross_x_nmi=self.desired_cross_x_nmi,
+            target_speed_mps=self.target_speed_mps,
+            ownship_speed_mps=self.ownship_speed_mps,
         )
-        
+
         self.episode_count += 1
-        
-        # Reset and return observation (with padding)
+
         obs, info = self.env.reset(seed=self.current_seed)
         obs = self._pad_observation(obs, self.current_case)
-        
-        # Add case/seed info to info dict for logging
+
         info["case"] = self.current_case
         info["seed"] = self.current_seed
         info["episode"] = self.episode_count
-        
+
         return obs, info
-    
+        
     def step(self, action) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """Step environment (delegated to wrapped env). Returns padded observation."""
         obs, reward, terminated, truncated, info = self.env.step(action)

@@ -19,7 +19,7 @@ from pettingzoo.utils import ParallelEnv
 from .path_setup import ensure_paths
 ensure_paths()
 
-from utils.imazu_cases_old import get_obstacle_data
+from utils.imazu_cases import get_obstacle_data
 from navigation.planning import waypoint_selection, planning
 from navigation.reactive_avoidance import reactive_avoidance
 from navigation.obstacle_sim import obstacle_sim
@@ -90,6 +90,9 @@ class CORALLComparisonEnv(ParallelEnv):
             obs_norm: ObsNorm = ObsNorm(),
             route_len_nmi: float = 2.0,
             goal_radius_m: float = 60.0,
+             desired_cross_x_nmi: float = 1.0,
+            target_speed_mps: float = 10.0,
+            ownship_speed_mps: Optional[float] = None,
             # spatial optimization (AABB broad-phase filtering for pairwise CPA)
             enable_aabb_filtering: bool = False,
             aabb_radius_m: float = 1500.0,
@@ -113,7 +116,15 @@ class CORALLComparisonEnv(ParallelEnv):
             self.aabb_radius_m = float(aabb_radius_m)
 
             # CORALL case traffic
-            Xob, Yob, Vob, psiob = get_obstacle_data(self.case_number)
+            Xob, Yob, Vob, psiob = get_obstacle_data(
+                self.case_number,
+                desired_cross_x_nmi=desired_cross_x_nmi,
+                target_speed_mps=target_speed_mps,
+                ownship_speed_mps=ownship_speed_mps,
+                synchronize_arrivals=True,
+                min_speed_mps=6.0,
+                max_speed_mps=14.0,
+            )
             self.n_obstacles = len(Xob)
 
             # Only ownship is an active control agent for CORALL baseline comparison
@@ -237,37 +248,10 @@ class CORALLComparisonEnv(ParallelEnv):
         self.done = False
 
         # reset scripted traffic to the original CORALL case definition
-        Xob_raw = self._case_cache["Xob"].copy()
-        Yob_raw = self._case_cache["Yob"].copy()
+        self.Xob = self._case_cache["Xob"].copy()
+        self.Yob = self._case_cache["Yob"].copy()
         self.Vob = self._case_cache["Vob"].copy()
-        psiob_raw = self._case_cache["psiob"].copy()
-
-        # Apply same per-case scaling as SB3 environment for EXACT comparison
-        # CRITICAL: Must match env_multi_agent_ppo.py scaling to ensure baseline and RL see same geometry
-        case_scales = {1: 0.5, 6: 0.5, 21: 0.5}
-        scenario_scale = case_scales.get(self.case_number, 1.0)
-        self.Xob = Xob_raw * scenario_scale
-        self.Yob = Yob_raw * scenario_scale
-
-        # Compute obstacle headings DIRECTLY TOWARD OWNSHIP (at origin 0,0)
-        # This creates true head-on collision courses for realistic training encounters
-        # Ownship is always at origin, so vector is simply (0 - x_obs, 0 - y_obs)
-        
-        self.psiob = np.zeros_like(psiob_raw, dtype=float)
-        for j in range(len(self.Xob)):
-            x_obs_nmi = self.Xob[j] / NMI
-            y_obs_nmi = self.Yob[j] / NMI
-            
-            # Vector from obstacle to ownship (at origin)
-            dx_to_ownship = 0.0 - x_obs_nmi  # -x_obs
-            dy_to_ownship = 0.0 - y_obs_nmi  # -y_obs
-            
-            if abs(dx_to_ownship) < 1e-9 and abs(dy_to_ownship) < 1e-9:
-                # Obstacle at same position as ownship (degenerate case)
-                self.psiob[j] = 0.0
-            else:
-                # Heading that points directly at ownship
-                self.psiob[j] = float(np.arctan2(dy_to_ownship, dx_to_ownship))
+        self.psiob = self._case_cache["psiob"].copy()
 
         self.X_all = np.zeros((self.n_agents_total, 6), dtype=float)
         self.X_all[0, :] = self.init_ownship()

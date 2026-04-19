@@ -27,6 +27,28 @@ from visualization.rendering import animate_ship
 
 NMI = 1852.0
 
+def find_episode_file(hist_dir: Path, episode_index: int, episode_seed: int | None = None) -> Path | None:
+    """
+    Map evaluation episode_index / episode_seed to the correct saved history file.
+
+    Expected filename pattern:
+        case{case}_seed{seed}_ep{episode_index:03d}.npz
+    """
+    candidates = sorted(hist_dir.glob("*.npz"))
+
+    ep_token = f"_ep{episode_index:03d}"
+    matches = [p for p in candidates if ep_token in p.stem]
+
+    if episode_seed is not None:
+        seed_token = f"_seed{episode_seed}"
+        seeded = [p for p in matches if seed_token in p.stem]
+        if seeded:
+            return seeded[0]
+
+    if matches:
+        return matches[0]
+
+    return None
 
 def compute_bounds_nmi(X_all: np.ndarray, pad_nmi: float = 0.8):
     """Compute plot bounds from episode trajectory."""
@@ -242,112 +264,142 @@ def batch_animate_episodes(
     fps: int = 20,
     stride: int = 4,
 ):
-    """Animate ONLY the best episode from an evaluation directory (highest return)."""
+    """Animate the best and worst episodes from an evaluation directory."""
     eval_path = Path(eval_dir)
     hist_dir = eval_path / "episode_histories"
     summary_file = eval_path / "policy_eval_summary.json"
-    
-    # If files not at root level, check seed_0 subdirectory (baseline eval structure)
+
+    # If files not at root level, search for seed_* subdirectories
     if not hist_dir.exists() or not summary_file.exists():
-        seed_0_path = eval_path / "seed_0"
-        hist_dir_alt = seed_0_path / "episode_histories"
-        summary_file_alt = seed_0_path / "policy_eval_summary.json"
-        
-        if hist_dir_alt.exists() and summary_file_alt.exists():
-            print(f"Found files in seed_0 subdirectory, using: {seed_0_path}")
-            hist_dir = hist_dir_alt
-            summary_file = summary_file_alt
-    
+        seed_dirs = sorted([p for p in eval_path.glob("seed_*") if p.is_dir()])
+        found = False
+        for seed_dir in seed_dirs:
+            hist_dir_alt = seed_dir / "episode_histories"
+            summary_file_alt = seed_dir / "policy_eval_summary.json"
+            if hist_dir_alt.exists() and summary_file_alt.exists():
+                print(f"Found files in seed subdirectory, using: {seed_dir}")
+                hist_dir = hist_dir_alt
+                summary_file = summary_file_alt
+                eval_path = seed_dir
+                found = True
+                break
+        if not found:
+            print(f"ERROR: could not find valid seed_* evaluation directory under {eval_path}")
+            return
+
     if not hist_dir.exists():
         print(f"ERROR: episode_histories directory not found at {hist_dir}")
         return
-    
-    # Load evaluation summary to find best episode
+
     if not summary_file.exists():
         print(f"ERROR: policy_eval_summary.json not found at {summary_file}")
         return
-    
-    with open(summary_file, 'r') as f:
+
+    with open(summary_file, "r") as f:
         summary = json.load(f)
-    
-    # First, try to get best episode from summary fields (SB3 eval format)
-    best_idx = summary.get("best_return_episode_idx")
-    best_return = summary.get("best_return_value")
-    
-    # If not found in summary, try to get per_episode_metrics from summary (policy eval format)
-    if best_idx is None or best_return is None:
-        per_episode_metrics = summary.get("per_episode_metrics", [])
-        
-        # If not found, try to load from CSV file (baseline eval format)
-        if not per_episode_metrics:
-            csv_file = eval_path.parent / "policy_eval_per_episode.csv" if "seed_0" in str(eval_path) else eval_path / "policy_eval_per_episode.csv"
-            # Check seed_0 subdirectory if needed
-            if not csv_file.exists():
-                csv_file = eval_path / "seed_0" / "policy_eval_per_episode.csv"
-            
-            if csv_file.exists():
-                import csv
-                with open(csv_file, 'r') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        try:
-                            per_episode_metrics.append({
-                                "episode_index": int(row.get("episode_index", 0)),
-                                "episode_return": float(row.get("episode_return_ownship", 0.0))
-                            })
-                        except (ValueError, KeyError):
-                            pass
-        
-        if not per_episode_metrics:
-            print("ERROR: No best_return_episode_idx in summary, no per_episode_metrics, and no CSV file found")
-            return
-        
-        # Find episode with best return
-        best_idx = 0
-        best_return = per_episode_metrics[0]["episode_return"]
-        for i, metrics in enumerate(per_episode_metrics):
-            if metrics["episode_return"] > best_return:
-                best_return = metrics["episode_return"]
-                best_idx = i
-        
-        print(f"Found {len(per_episode_metrics)} episodes total")
+
+    csv_file = eval_path / "policy_eval_per_episode.csv"
+    per_episode_metrics = []
+
+    if csv_file.exists():
+        import csv
+        with open(csv_file, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    # support both RL and baseline CSV naming
+                    if "episode_return" in row:
+                        ep_return = float(row["episode_return"])
+                    elif "episode_return_ownship" in row:
+                        ep_return = float(row["episode_return_ownship"])
+                    else:
+                        ep_return = 0.0
+
+                    per_episode_metrics.append({
+                        "episode_index": int(row.get("episode_index", 0)),
+                        "episode_seed": int(row.get("episode_seed", 0)),
+                        "episode_return": ep_return,
+                    })
+                except (ValueError, KeyError):
+                    pass
+
+    # Prefer CSV because it carries both episode_index and episode_seed explicitly
+    if per_episode_metrics:
+        best_row = max(per_episode_metrics, key=lambda r: r["episode_return"])
+        worst_row = min(per_episode_metrics, key=lambda r: r["episode_return"])
+
+        best_idx = int(best_row["episode_index"])
+        best_seed = int(best_row["episode_seed"])
+        best_return = float(best_row["episode_return"])
+
+        worst_idx = int(worst_row["episode_index"])
+        worst_seed = int(worst_row["episode_seed"])
+        worst_return = float(worst_row["episode_return"])
     else:
-        # Count total episodes from files
-        episode_files = sorted(hist_dir.glob("*.npz"))
-        print(f"Found {len(episode_files)} episodes total")
-    
-    print(f"Best episode: Episode {best_idx:03d} with return = {best_return:.3f}")
-    
-    # Find corresponding npz file for best episode
+        # Fallback to summary-only behavior
+        best_idx = int(summary.get("best_return_episode_idx", 0))
+        best_seed = int(summary.get("best_return_episode_seed", 0))
+        best_return = float(summary.get("best_return_value", 0.0))
+
+        # Without CSV, worst is harder to identify robustly
+        worst_idx = 0
+        worst_seed = 0
+        worst_return = 0.0
+
     episode_files = sorted(hist_dir.glob("*.npz"))
-    if best_idx >= len(episode_files):
-        print(f"ERROR: Best episode index {best_idx} exceeds number of files {len(episode_files)}")
+    print(f"Found {len(episode_files)} episodes total")
+
+    print(f"\nEpisode Return Range:")
+    print(f"  Best:  Episode {best_idx:03d} with return = {best_return:10.3f}")
+    print(f"  Worst: Episode {worst_idx:03d} with return = {worst_return:10.3f}")
+    print(f"  Delta: {best_return - worst_return:10.3f}\n")
+
+    best_file = find_episode_file(hist_dir, best_idx, best_seed)
+    worst_file = find_episode_file(hist_dir, worst_idx, worst_seed)
+
+    if best_file is None:
+        print(f"ERROR: Could not find history file for best episode idx={best_idx}, seed={best_seed}")
         return
-    
-    ep_file = episode_files[best_idx]
-    
-    # Create output directory
+    if worst_file is None:
+        print(f"ERROR: Could not find history file for worst episode idx={worst_idx}, seed={worst_seed}")
+        return
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Animate only the best episode
-    output_gif = output_path / f"{ep_file.stem}_BEST.gif"
-    print(f"Animating best episode: {ep_file.stem}")
-    
+
+    # Animate best
+    best_gif = output_path / f"{best_file.stem}_BEST.gif"
+    print(f"Animating best episode: {best_file.stem}")
     try:
         animate_single_episode(
-            ep_file,
-            output_gif,
+            best_file,
+            best_gif,
             case=case,
             ship_scale=ship_scale,
             fps=fps,
             stride=stride,
         )
-        print(f"✓ Best episode animation saved to: {output_gif.name}")
+        print(f"  ✓ Saved: {best_gif.name}")
     except Exception as e:
-        print(f"✗ Error animating best episode: {e}")
-    
-    print(f"\nAnimation saved to: {output_path}")
+        print(f"  ✗ Error: {e}")
+
+    # Animate worst
+    worst_gif = output_path / f"{worst_file.stem}_WORST.gif"
+    print(f"\nAnimating worst episode: {worst_file.stem}")
+    try:
+        animate_single_episode(
+            worst_file,
+            worst_gif,
+            case=case,
+            ship_scale=ship_scale,
+            fps=fps,
+            stride=stride,
+        )
+        print(f"  ✓ Saved: {worst_gif.name}")
+    except Exception as e:
+        print(f"  ✗ Error: {e}")
+
+    print(f"\nAnimations saved to: {output_path}")
 
 
 def main():

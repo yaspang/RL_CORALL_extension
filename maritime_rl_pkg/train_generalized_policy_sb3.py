@@ -46,51 +46,96 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
+from maritime_rl_pkg.episode_tracker import EpisodeReturnTracker
 
 
 class GeneralizedTrainingMetricsCallback(BaseCallback):
-    """Track training metrics using SB3's Monitor wrapper and logger."""
+    """Track training metrics using EpisodeReturnTracker wrapper."""
     
-    def __init__(self, verbose=1):
+    def __init__(self, episode_tracker=None, verbose=1, output_dir=None):
         super().__init__(verbose)
+        self.episode_tracker = episode_tracker  # Reference to EpisodeReturnTracker wrapper
         self.verbose = verbose
+        self.output_dir = output_dir
         self.timesteps = []
-        self.mean_returns = []
+        self.train_returns = []
+        self.val_returns = []
         self.episode_counter = 0
+        self.logger_keys_printed = False
+        self.valid_key = None
+        self.diagnostics_file = None
+        if output_dir:
+            self.diagnostics_file = output_dir / "logger_diagnostics.txt"
     
     def _on_step(self) -> bool:
         """Called after each environment step."""
-        # Log every 5000 steps by querying the model's logger
-        if self.num_timesteps % 5000 == 0 and self.num_timesteps > 0:
-            mean_reward = self._get_mean_episode_return()
+        # Print available logger keys on first substantial step (after ~1% of data collected)
+        if not self.logger_keys_printed and self.num_timesteps > 500:
+            self._print_available_keys()
+            self.logger_keys_printed = True
+        
+        # Log metrics periodically
+        if self.num_timesteps % 1000 == 0 and self.num_timesteps > 0:
+            # Training return: mean of all episodes up to now
+            train_return = self._get_mean_episode_return()
+            
+            # Validation return: mean of only recent episodes (last ~10% of what we've seen)
+            val_return = np.nan
             
             self.timesteps.append(self.num_timesteps)
-            self.mean_returns.append(mean_reward)
+            self.train_returns.append(train_return)
+            self.val_returns.append(val_return)
             
             if self.verbose:
-                print(f"[Step {self.num_timesteps:7d}] Mean Episode Return: {mean_reward:10.2f}")
+                print(f"[Step {self.num_timesteps:7d}] Train Return: {train_return:10.2f}  Validation Return: {val_return:10.2f}")
         
         return True
     
+    
+    def _print_available_keys(self):
+        """Print and save all available logger keys for debugging."""
+        header = "\n" + "=" * 80
+        title = "LOGGER KEYS AVAILABLE AT FIRST CHECKPOINT"
+        footer = "=" * 80 + "\n"
+        
+        lines = [header, title, footer]
+        
+        if hasattr(self.model, 'logger') and self.model.logger is not None:
+            logger_dict = self.model.logger.name_to_value
+            lines.append(f"Total keys: {len(logger_dict)}")
+            lines.append(f"All keys: {sorted(logger_dict.keys())}")
+            lines.append("\nKey values:")
+            for key in sorted(logger_dict.keys()):
+                val = logger_dict[key]
+                lines.append(f"  {key}: {val}")
+        else:
+            lines.append("ERROR: No logger found on model!")
+        
+        lines.append(footer)
+        
+        # Print to console
+        output = "\n".join(lines)
+        print(output)
+        
+        # Save to file
+        if self.diagnostics_file:
+            try:
+                with open(self.diagnostics_file, 'w') as f:
+                    f.write(output)
+                if self.verbose:
+                    print(f"[Info] Logger diagnostics saved to: {self.diagnostics_file}")
+            except Exception as e:
+                print(f"[Warning] Failed to save diagnostics to file: {e}")
+    
     def _get_mean_episode_return(self) -> float:
-        """Extract mean episode return from SB3's logger."""
+        """Extract mean episode return from EpisodeReturnTracker."""
         try:
-            # For PPO, the key is 'rollout/ep_rew_mean' or sometimes 'rollout/ep_mean_reward'
-            if hasattr(self.model, 'logger') and self.model.logger is not None:
-                logger_dict = self.model.logger.name_to_value
-                
-                # Try multiple possible keys
-                for key in ['rollout/ep_rew_mean', 'rollout/ep_mean_reward', 'ep_rew_mean']:
-                    if key in logger_dict:
-                        val = float(logger_dict.get(key, 0.0))
-                        if val != 0.0:  # Only return if non-zero
-                            return val
-            
-            # Fallback: return 0
+            if self.episode_tracker is not None:
+                return self.episode_tracker.get_mean_return()
             return 0.0
         except Exception as e:
             if self.verbose:
-                print(f"  [Warning] Could not retrieve mean reward from logger: {e}")
+                print(f"  [Debug] Return extraction failed: {type(e).__name__}: {e}")
             return 0.0
     
     def _on_training_end(self) -> None:
@@ -99,22 +144,31 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         print("TRAINING COMPLETE - CONVERGENCE METRICS")
         print("=" * 80)
         
-        if self.mean_returns:
-            valid_returns = [r for r in self.mean_returns if r != 0.0]
+        if not self.logger_keys_printed:
+            print("\n[Info] Logger keys were never printed - first checkpoint may not have been reached")
+        
+        if self.train_returns:
+            valid_returns = [r for r in self.train_returns if r != 0.0]
             if valid_returns:
-                print(f"\nEpisode Return Statistics (from {len(valid_returns)} non-zero checkpoints):")
+                print(f"\nTraining Episode Return Statistics (from {len(valid_returns)}/{len(self.train_returns)} checkpoints):")
                 print(f"  Final return:    {valid_returns[-1]:10.2f}")
                 print(f"  Best return:     {np.max(valid_returns):10.2f}")
                 print(f"  Mean return:     {np.mean(valid_returns):10.2f}")
                 print(f"  Std return:      {np.std(valid_returns):10.2f}")
+                
+                # Check for convergence/overfitting
+                if len(valid_returns) >= 3:
+                    recent_mean = np.mean(valid_returns[-3:])
+                    early_mean = np.mean(valid_returns[:3])
+                    improvement = recent_mean - early_mean
+                    print(f"\nConvergence Signal:")
+                    print(f"  Early mean (first 3):   {early_mean:10.2f}")
+                    print(f"  Recent mean (last 3):   {recent_mean:10.2f}")
+                    print(f"  Improvement:            {improvement:10.2f}")
             else:
-                print("\n⚠️  WARNING: No non-zero episode returns logged during training!")
-                print("    This may indicate a logging issue. Check:")
-                print("    1. Is the environment properly wrapped with Monitor()?")
-                print("    2. Are episodes actually completing during training?")
-                print("    3. Check SB3 logger keys with: model.logger.name_to_value.keys()")
+                print(f"\n⚠️  All {len(self.train_returns)} checkpoint returns are 0.0!")
         else:
-            print("\n⚠️  WARNING: No metrics were logged during training!")
+            print("\n⚠️  No metrics were logged during training!")
         
         print("=" * 80 + "\n")
 
@@ -127,38 +181,79 @@ def create_output_dir(timestamp: str) -> Path:
     return output_dir
 
 
-def plot_training_convergence(timesteps: list, mean_returns: list, output_path: Path):
-    """Plot training convergence curve."""
-    if not timesteps or not mean_returns:
+def plot_training_convergence(timesteps: list, train_returns: list, val_returns: list, output_path: Path):
+    """Plot training convergence curve with train and validation signals."""
+    if not timesteps or not train_returns:
         print("  [Skipped convergence plot - no training data collected]")
         return
     
-    fig, ax = plt.subplots(figsize=(12, 6))
+    print(f"  Plotting {len(timesteps)} checkpoints...")
+    
+    fig, ax = plt.subplots(figsize=(14, 7))
     
     # Convert to millions of steps for readability
     timesteps_m = np.array(timesteps) / 1e6
     
-    ax.plot(timesteps_m, mean_returns, linewidth=2.5, marker='o', 
-            markersize=6, color='steelblue', label='Mean Episode Return')
+    # Plot training returns
+    ax.plot(timesteps_m, train_returns, linewidth=2.5, marker='o', 
+            markersize=7, color='steelblue', label='Training Return', zorder=3)
     
-    # Add a trend line (simple moving average)
-    if len(mean_returns) > 3:
-        window = max(1, len(mean_returns) // 5)
-        trend = np.convolve(mean_returns, np.ones(window)/window, mode='valid')
+    # Plot validation returns if they exist and if they are real values (not all NaN or zero)
+    has_validation = (
+        val_returns
+        and len(val_returns) == len(train_returns)
+        and np.any(np.isfinite(val_returns))
+    )
+
+    if has_validation:
+        finite_mask = np.isfinite(val_returns)
+        ax.plot(
+            timesteps_m[finite_mask],
+            np.array(val_returns)[finite_mask],
+            linewidth=2.5,
+            marker='s',
+            markersize=7,
+            color='coral',
+            label='Validation Return',
+            zorder=3,
+        )
+
+
+    are_different = False # initialize at function scope for later use
+    if has_validation:
+        # Check if validation is actually different from training
+        are_different = not np.allclose(train_returns, val_returns)
+        if are_different:
+            ax.plot(timesteps_m, val_returns, linewidth=2.5, marker='s', 
+                    markersize=7, color='coral', label='Validation Return', zorder=3)
+    
+    # Add trend lines (moving average)
+    if len(train_returns) > 3:
+        window = max(1, len(train_returns) // 5)
+        
+        train_trend = np.convolve(train_returns, np.ones(window)/window, mode='valid')
         trend_timesteps = timesteps_m[window-1:]
-        ax.plot(trend_timesteps, trend, linewidth=2.5, linestyle='--', 
-                color='darkorange', alpha=0.7, label='Trend (Moving Avg)')
+        ax.plot(trend_timesteps, train_trend, linewidth=2.5, linestyle='--', 
+                color='navy', alpha=0.6, label='Training Trend', zorder=2)
+        
+        if has_validation and are_different:
+            val_trend = np.convolve(val_returns, np.ones(window)/window, mode='valid')
+            ax.plot(trend_timesteps, val_trend, linewidth=2.5, linestyle='--', 
+                    color='darkred', alpha=0.6, label='Validation Trend', zorder=2)
     
     ax.set_xlabel('Training Steps (Millions)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Episode Return', fontsize=12, fontweight='bold')
-    ax.set_title('Generalized Policy Training Convergence', fontsize=13, fontweight='bold')
-    ax.grid(True, alpha=0.3)
+    ax.set_title('Generalized Policy Training Return', 
+                 fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3, zorder=1)
     ax.legend(fontsize=11, loc='best')
     
     fig.tight_layout()
-    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    pdf_path = output_path.with_suffix('.pdf')
+    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  ✓ Convergence plot saved to: {output_path.name}")
+    print(f"  ✓ Convergence plot saved to: {output_path.name} and {pdf_path.name}")
 
 
 def main():
@@ -187,6 +282,12 @@ def main():
                         help="Master seed for reproducible case/seed sequence (default: None = random)")
     parser.add_argument("--cases", type=int, nargs="+", default=[1, 6, 21],
                         help="Cases to train on (default: 1 6 21, use --cases 1 2 3 ... 23 for all)")
+    parser.add_argument("--desired_cross_x_nmi", type=float, default=1.0,
+                        help="Encounter cluster distance along 2 nmi route (default: 1.0, try 1.2-1.3 for more engagement)")
+    parser.add_argument("--target_speed_mps", type=float, default=10.0,
+                        help="Obstacle speed in m/s (default: 10.0, use 8.5-9.0 for slower obstacles)")
+    parser.add_argument("--ownship_speed_mps", type=float, default=None,
+                        help="Ownship cruising speed in m/s (default: None = inherit from first obstacle). Use 11.0 for slight speed advantage.")
     
     args = parser.parse_args()
     
@@ -197,15 +298,18 @@ def main():
     print("TRAINING GENERALIZED POLICY ACROSS MULTIPLE CASES")
     print("=" * 80)
     print(f"\nConfiguration:")
-    print(f"  Cases to train on:  {args.cases}")
-    print(f"  Total steps:        {args.num_steps:,}")
-    print(f"  Checkpoint freq:    {args.checkpoint_freq:,}")
-    print(f"  Parallel workers:   {args.num_workers}")
-    print(f"  Learning rate:      {args.lr}")
-    print(f"  Master seed:        {args.master_seed if args.master_seed is not None else 'random'}")
-    print(f"  MLP architecture:   {args.mlp_hiddens}")
-    print(f"\nOutput directory:     {output_dir}")
-    print(f"Timestamp:            {timestamp}")
+    print(f"  Cases to train on:         {args.cases}")
+    print(f"  Total steps:               {args.num_steps:,}")
+    print(f"  Checkpoint freq:           {args.checkpoint_freq:,}")
+    print(f"  Parallel workers:          {args.num_workers}")
+    print(f"  Learning rate:             {args.lr}")
+    print(f"  Desired encounter distance (nmi): {args.desired_cross_x_nmi}")
+    print(f"  Obstacle speed (m/s):      {args.target_speed_mps}")
+    print(f"  Ownship speed (m/s):       {args.ownship_speed_mps if args.ownship_speed_mps else 'inherit from obstacles'}")
+    print(f"  Master seed:               {args.master_seed if args.master_seed is not None else 'random'}")
+    print(f"  MLP architecture:          {args.mlp_hiddens}")
+    print(f"\nOutput directory:            {output_dir}")
+    print(f"Timestamp:                   {timestamp}")
     print("=" * 80 + "\n")
     
     model = None  # Initialize to handle potential unbound errors in exception handlers
@@ -216,16 +320,23 @@ def main():
             cases_to_train=args.cases,
             num_seeds=100,
             dt=0.5,
-            sim_time=1950.0,
+            sim_time=490.0,
             n_heading=7,
             max_heading_change_deg=25.0,
             loa_m=30.0,
             route_len_nmi=2.0,
             master_seed=args.master_seed,
+            desired_cross_x_nmi=args.desired_cross_x_nmi,
+            target_speed_mps=args.target_speed_mps,
+            ownship_speed_mps=args.ownship_speed_mps,
         )
         
         # Wrap with Monitor for proper episode return tracking
         env = Monitor(env)
+        
+        # Wrap with EpisodeReturnTracker for direct episode return access in callback
+        episode_tracker = EpisodeReturnTracker(env)
+        env = episode_tracker
         
         obs_space = env.observation_space
         act_space = env.action_space
@@ -267,7 +378,11 @@ def main():
             save_replay_buffer=False,
         )
         
-        metrics_callback = GeneralizedTrainingMetricsCallback(verbose=1)
+        metrics_callback = GeneralizedTrainingMetricsCallback(
+            episode_tracker=episode_tracker,
+            verbose=1,
+            output_dir=output_dir
+        )
         
         # Train
         print(f"Starting training with {args.num_steps:,} steps...\n")
@@ -284,7 +399,8 @@ def main():
         
         # Plot training convergence
         print(f"\nGenerating convergence plots...")
-        plot_training_convergence(metrics_callback.timesteps, metrics_callback.mean_returns, 
+        plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns, 
+                                 metrics_callback.val_returns,
                                  output_dir / "training_convergence.png")
         
         # Save training config
@@ -298,8 +414,11 @@ def main():
             "rollout_fragment_length": args.rollout_frag,
             "mlp_hiddens": args.mlp_hiddens,
             "seed": args.seed,
-            "cases_trained": [1, 6, 21],
+            "cases_trained": args.cases,
             "num_seeds": 100,
+            "desired_cross_x_nmi": args.desired_cross_x_nmi,
+            "target_speed_mps": args.target_speed_mps,
+            "ownship_speed_mps": args.ownship_speed_mps,
             "timestamp": timestamp,
         }
         
@@ -312,21 +431,6 @@ def main():
         print("\n" + "=" * 80)
         print("TRAINING COMPLETE")
         print("=" * 80)
-        print(f"\nNext steps:")
-        print(f"1. Evaluate on Case 1:")
-        print(f"   python -m maritime_rl_pkg.eval_single_agent_sb3 \\")
-        print(f"     --checkpoint '{final_path}' --case 1 \\")
-        print(f"     --episodes 100 --seed 0 --save_histories")
-        print(f"\n2. Evaluate on Case 6:")
-        print(f"   python -m maritime_rl_pkg.eval_single_agent_sb3 \\")
-        print(f"     --checkpoint '{final_path}' --case 6 \\")
-        print(f"     --episodes 100 --seed 0 --save_histories")
-        print(f"\n3. Evaluate on Case 21:")
-        print(f"   python -m maritime_rl_pkg.eval_single_agent_sb3 \\")
-        print(f"     --checkpoint '{final_path}' --case 21 \\")
-        print(f"     --episodes 100 --seed 0 --save_histories")
-        print(f"\n4. Compare results with baseline and case-specific policies")
-        print("=" * 80 + "\n")
         
     except KeyboardInterrupt:
         print("\n[Training interrupted by user]")

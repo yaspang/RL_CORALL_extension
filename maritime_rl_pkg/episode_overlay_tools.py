@@ -191,7 +191,9 @@ def plot_ownship_cpa_panel_baseline_rl(
     ax.set_ylim([0, 1.0])
     
     fig.tight_layout()
-    fig.savefig(save_path, dpi=200, bbox_inches='tight')
+    fig.savefig(save_path, dpi=300, bbox_inches='tight', format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -326,7 +328,9 @@ def plot_ownship_threat_profile(
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
     fig.tight_layout(rect=(0, 0, 1.0, 0.96))
-    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    fig.savefig(save_path, dpi=300, bbox_inches="tight", format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, bbox_inches="tight", format='pdf')
     plt.close(fig)
     return save_path
 
@@ -502,7 +506,9 @@ def plot_full_trajectory_overlay(
     ax.set_ylim(np.min(all_y) - ypad, np.max(all_y) + ypad)
 
     fig.tight_layout()
-    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    fig.savefig(save_path, dpi=300, bbox_inches="tight", format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, bbox_inches="tight", format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -637,7 +643,9 @@ def plot_encounter_detail_clean(
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     fig.tight_layout()
-    fig.savefig(save_path, dpi=200)
+    fig.savefig(save_path, dpi=300, format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -668,7 +676,9 @@ def plot_risk_timeseries(
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(save_path, dpi=200)
+    fig.savefig(save_path, dpi=300, format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -710,7 +720,9 @@ def plot_min_dcpa_timeseries(
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(save_path, dpi=200)
+    fig.savefig(save_path, dpi=300, format='png')
+    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
+    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
     
@@ -1004,7 +1016,9 @@ def plot_episode_overlay(
     ax.set_ylim(np.min(all_y) - ypad, np.max(all_y) + ypad)
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    pdf_path = output_path.with_suffix('.pdf')
+    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 
@@ -1061,7 +1075,9 @@ def plot_risk_dcpa_timeseries(
     ax1.set_title("Ownship risk and closest approach history", fontsize=14, fontweight="bold")
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches='tight')
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    pdf_path = output_path.with_suffix('.pdf')
+    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 
@@ -1278,7 +1294,9 @@ def plot_encounter_overlay(
     ax.legend(loc="best")
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    pdf_path = output_path.with_suffix('.pdf')
+    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 

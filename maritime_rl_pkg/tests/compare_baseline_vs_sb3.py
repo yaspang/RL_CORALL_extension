@@ -265,9 +265,10 @@ def generate_case_comparison(
             ax=ax,
             title=f"Case {case}: Trajectory Comparison (Baseline vs SB3)",
         )
-        fig.savefig(output_dir / "trajectory_overlay.png", dpi=150, bbox_inches="tight")
+        fig.savefig(output_dir / "trajectory_overlay.png", dpi=300, bbox_inches="tight", format='png')
+        fig.savefig(output_dir / "trajectory_overlay.pdf", bbox_inches="tight", format='pdf')
         plt.close(fig)
-        print("    ✓ Saved: trajectory_overlay.png")
+        print("    ✓ Saved: trajectory_overlay.png and .pdf")
     except Exception as e:
         print(f"    ✗ Error generating trajectory plot: {e}")
     
@@ -303,9 +304,10 @@ def generate_case_comparison(
         axes[1].grid(True, alpha=0.3)
         
         fig.tight_layout()
-        fig.savefig(output_dir / "dcpa_risk_timeseries.png", dpi=150, bbox_inches="tight")
+        fig.savefig(output_dir / "dcpa_risk_timeseries.png", dpi=300, bbox_inches="tight", format='png')
+        fig.savefig(output_dir / "dcpa_risk_timeseries.pdf", bbox_inches="tight", format='pdf')
         plt.close(fig)
-        print("    ✓ Saved: dcpa_risk_timeseries.png")
+        print("    ✓ Saved: dcpa_risk_timeseries.png and .pdf")
     except Exception as e:
         print(f"    ✗ Error generating timeseries plot: {e}")
     

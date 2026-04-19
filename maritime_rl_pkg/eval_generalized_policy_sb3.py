@@ -135,6 +135,25 @@ def parse_args():
         action="store_true",
         help="Save only first episode history"
     )
+
+    p.add_argument(
+        "--desired_cross_x_nmi",
+        type=float,
+        default=1.0,
+        help="Encounter cluster distance along route (must match training if comparing fairly)"
+    )
+    p.add_argument(
+        "--target_speed_mps",
+        type=float,
+        default=10.0,
+        help="Default / fallback target speed used by synchronized-speed generator"
+    )
+    p.add_argument(
+        "--ownship_speed_mps",
+        type=float,
+        default=None,
+        help="Ownship cruising speed used during evaluation (should match training)"
+    )
     return p.parse_args()
 
 
@@ -227,6 +246,7 @@ def run_one_episode(model, env, seed, args, capture_history=False):
         "success_ownship": int(ownship_metrics.get("success", 0)),
         "path_length_m_ownship": float(ownship_metrics.get("path_length_m", 0.0)),
         "min_dcpa_m_ownship": float(ownship_dcpa),
+        "min_actual_sep_m_ownship": float(ownship_metrics.get("min_actual_sep_m", np.inf)),
         "min_tcpa_s_ownship": float(ownship_metrics.get("min_tcpa_s", np.inf)),
         "risk_exposure_ownship": float(ownship_metrics.get("risk_exposure", 0.0)),
         "completion_time_s_ownship": float(ownship_metrics.get("completion_time_s", np.inf)),
@@ -273,6 +293,9 @@ def evaluate_policy(args):
         sim_time=args.sim_time,
         route_len_nmi=args.route_len_nmi,
         master_seed=None,
+        desired_cross_x_nmi=args.desired_cross_x_nmi,
+        target_speed_mps=args.target_speed_mps,
+        ownship_speed_mps=args.ownship_speed_mps,
     )
     
     # Output directory
@@ -361,12 +384,15 @@ def evaluate_policy(args):
     print(f"Collision:      {bool(best_ep['collision_any'])}")
     print(f"Min DCPA (m):   {best_ep['min_dcpa_m_ownship']:.1f}")
     hist_pattern = f"case{args.case}_seed{best_seed}_ep{best_ep_idx:03d}.npz"
+    print(f"Desired cross x (nmi): {args.desired_cross_x_nmi}")
+    print(f"Target speed (m/s):    {args.target_speed_mps}")
+    print(f"Ownship speed (m/s):   {args.ownship_speed_mps}")
     print(f"\nHistory file:   {hist_pattern}")
     print(f"{'='*70}\n")
     
     # Print batch_animate_eval command
     print("To animate this episode with batch_animate_eval:")
-    print(f"  python -m maritime_rl_pkg.batch_animate_eval {output_dir}")
+    print(f"  python -m maritime_rl_pkg.batch_animate_eval --eval_dir \"{seed_dir}\"")
     print()
 
 
