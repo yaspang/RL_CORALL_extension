@@ -820,7 +820,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 
                 # SPARSE REWARD ONLY: Delta progress for milestone rewards
                 # Avoid continuous progress reward - it competes with risk penalty and causes aggressive behavior
-                w_along = 10.0
+                w_along = 1.0
                 r_along = w_along * delta_progress                
             else:
                 # Agent already reached goal - no waypoint following reward

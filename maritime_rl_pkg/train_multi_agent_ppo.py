@@ -534,9 +534,8 @@ def main():
         ax1.grid(True, alpha=0.3)
         fig1.tight_layout()
         fig1.savefig(output_dir / "training_return.png", dpi=300, format='png')
-        fig1.savefig(output_dir / "training_return.pdf", format='pdf')
         plt.close(fig1)
-        print(f"✓ Training return plot saved to: {output_dir / 'training_return.png'} and .pdf")
+        print(f"✓ Training return plot saved to: {output_dir / 'training_return.png'}")
     except Exception as e:
         print(f"[WARNING] Failed to save training_return plot: {e}")
     
@@ -556,9 +555,8 @@ def main():
             ax2.grid(True, alpha=0.3)
             fig2.tight_layout()
             fig2.savefig(output_dir / "throughput_trajectory.png", dpi=300, format='png')
-            fig2.savefig(output_dir / "throughput_trajectory.pdf", format='pdf')
             plt.close(fig2)
-            print(f"✓ Throughput plot saved to: {output_dir / 'throughput_trajectory.png'} and .pdf")
+            print(f"✓ Throughput plot saved to: {output_dir / 'throughput_trajectory.png'}")
         else:
             print(f"[WARNING] No timing metrics available; skipping throughput plot")
     except Exception as e:

@@ -228,7 +228,6 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "01_returns_by_case.png", dpi=300, bbox_inches="tight", format='png')
-    fig.savefig(output_dir / "01_returns_by_case.pdf", bbox_inches="tight", format='pdf')
     plt.close()
     
     # 2. Collision and near-miss rates
@@ -246,7 +245,6 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     ax.grid(True, alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(output_dir / "02_safety_rates_by_case.png", dpi=300, bbox_inches="tight", format='png')
-    fig.savefig(output_dir / "02_safety_rates_by_case.pdf", bbox_inches="tight", format='pdf')
     plt.close()
     
     # 3. Distance metrics
@@ -261,7 +259,6 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "03_distance_metrics_by_case.png", dpi=300, bbox_inches="tight", format='png')
-    fig.savefig(output_dir / "03_distance_metrics_by_case.pdf", bbox_inches="tight", format='pdf')
     plt.close()
     
     # 4. Time-to-collision
@@ -275,7 +272,6 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "04_tcpa_by_case.png", dpi=300, bbox_inches="tight", format='png')
-    fig.savefig(output_dir / "04_tcpa_by_case.pdf", bbox_inches="tight", format='pdf')
     plt.close()
 
 

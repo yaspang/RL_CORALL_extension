@@ -250,10 +250,8 @@ def plot_training_convergence(timesteps: list, train_returns: list, val_returns:
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    pdf_path = output_path.with_suffix('.pdf')
-    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  ✓ Convergence plot saved to: {output_path.name} and {pdf_path.name}")
+    print(f"  ✓ Convergence plot saved to: {output_path.name}")
 
 
 def main():

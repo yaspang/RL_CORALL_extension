@@ -137,7 +137,7 @@ def plot_ownship_cpa_panel_baseline_rl(
     
     # Create 2x2 subplot
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f"Ownship CPA Analysis | Case {baseline_hist.get('case', '?')} | Seed {baseline_hist.get('seed', '?')}",
+    fig.suptitle(f"Ownship CPA Analysis | Case {baseline_hist.get('case', '?')}",
                  fontsize=14, fontweight="bold")
     
     # 1. DCPA (top-left)
@@ -192,8 +192,6 @@ def plot_ownship_cpa_panel_baseline_rl(
     
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, bbox_inches='tight', format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -244,77 +242,90 @@ def plot_ownship_threat_profile(
     dcpa_b_agg = series_min_abs_dcpa(pair_dcpab, pair_distb, own_idx=own_idx, encounter_dist_nmi=8.0)
     dcpa_r_agg = series_min_abs_dcpa(pair_dcpar, pair_distr, own_idx=own_idx, encounter_dist_nmi=8.0)
     
-    # Min range across all targets
+    # Min range across all targets (keep in meters)
     range_b_agg = []
     range_r_agg = []
     for i in range(len(tb)):
-        dists_b = pair_distb[i, own_idx, :]
+        dists_b = pair_distb[i, own_idx, :].copy()
         dists_b[own_idx] = np.inf
-        range_b_agg.append(np.nanmin(dists_b) / NMI if np.any(np.isfinite(dists_b)) else np.nan)
+        range_b_agg.append(np.nanmin(dists_b) if np.any(np.isfinite(dists_b)) else np.nan)
     for i in range(len(tr)):
-        dists_r = pair_distr[i, own_idx, :]
+        dists_r = pair_distr[i, own_idx, :].copy()
         dists_r[own_idx] = np.inf
-        range_r_agg.append(np.nanmin(dists_r) / NMI if np.any(np.isfinite(dists_r)) else np.nan)
+        range_r_agg.append(np.nanmin(dists_r) if np.any(np.isfinite(dists_r)) else np.nan)
     
     range_b_agg = np.array(range_b_agg)
     range_r_agg = np.array(range_r_agg)
     
-    # Min TCPA across all targets
+    # Min TCPA across all targets (clip negative = already passed CPA)
     tcpa_b_agg = []
     tcpa_r_agg = []
     for i in range(len(tb)):
-        tcpa_vals_b = pair_tcpab[i, own_idx, :]
+        tcpa_vals_b = pair_tcpab[i, own_idx, :].copy()
         tcpa_vals_b[own_idx] = np.inf
-        tcpa_b_agg.append(np.nanmin(tcpa_vals_b) if np.any(np.isfinite(tcpa_vals_b)) else np.nan)
+        val = np.nanmin(tcpa_vals_b) if np.any(np.isfinite(tcpa_vals_b)) else np.nan
+        tcpa_b_agg.append(max(0.0, val) if np.isfinite(val) else np.nan)
     for i in range(len(tr)):
-        tcpa_vals_r = pair_tcpar[i, own_idx, :]
+        tcpa_vals_r = pair_tcpar[i, own_idx, :].copy()
         tcpa_vals_r[own_idx] = np.inf
-        tcpa_r_agg.append(np.nanmin(tcpa_vals_r) if np.any(np.isfinite(tcpa_vals_r)) else np.nan)
+        val = np.nanmin(tcpa_vals_r) if np.any(np.isfinite(tcpa_vals_r)) else np.nan
+        tcpa_r_agg.append(max(0.0, val) if np.isfinite(val) else np.nan)
     
     tcpa_b_agg = np.array(tcpa_b_agg)
     tcpa_r_agg = np.array(tcpa_r_agg)
 
+    # Convert DCPA from nmi to meters for plotting
+    dcpa_b_m = dcpa_b_agg * NMI
+    dcpa_r_m = dcpa_r_agg * NMI
+
+    # RL episode end time for vertical marker
+    rl_end_time = float(tr[-1])
+
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 
-    # DCPA (top-left)
-    axs[0, 0].plot(tb[maskb], dcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
-    axs[0, 0].plot(tr[maskr], dcpa_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[0, 0].set_ylabel("DCPA (nmi)")
+    # DCPA (top-left) — in meters
+    axs[0, 0].plot(tb[maskb], dcpa_b_m[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[0, 0].plot(tr[maskr], dcpa_r_m[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
+    axs[0, 0].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2, label="RL episode ends")
+    axs[0, 0].set_ylabel("DCPA (m)")
     axs[0, 0].set_title("Distance to Closest Point of Approach")
     axs[0, 0].grid(True, alpha=0.3)
-    axs[0, 0].legend(fontsize=10, loc="best")
+    axs[0, 0].legend(fontsize=9, loc="best")
     if dcpa_ylim is not None:
         axs[0, 0].set_ylim(dcpa_ylim)
 
-    # Range (top-right)
+    # Range (top-right) — in meters
     axs[0, 1].plot(tb[maskb], range_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
     axs[0, 1].plot(tr[maskr], range_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[0, 1].set_ylabel("Range (nmi)")
+    axs[0, 1].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
+    axs[0, 1].set_ylabel("Range (m)")
     axs[0, 1].set_title("Range (Distance)")
     axs[0, 1].grid(True, alpha=0.3)
-    axs[0, 1].legend(fontsize=10, loc="best")
+    axs[0, 1].legend(fontsize=9, loc="best")
     if range_ylim is not None:
         axs[0, 1].set_ylim(range_ylim)
 
-    # TCPA (bottom-left)
+    # TCPA (bottom-left) — negative values clipped to 0
     axs[1, 0].plot(tb[maskb], tcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
     axs[1, 0].plot(tr[maskr], tcpa_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
+    axs[1, 0].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
     axs[1, 0].set_ylabel("TCPA (s)")
-    axs[1, 0].set_title("Time to Closest Point of Approach")
+    axs[1, 0].set_title("Time to CPA (0 = already passed)")
     axs[1, 0].set_xlabel("Time (s)")
     axs[1, 0].grid(True, alpha=0.3)
-    axs[1, 0].legend(fontsize=10, loc="best")
+    axs[1, 0].legend(fontsize=9, loc="best")
     if tcpa_ylim is not None:
         axs[1, 0].set_ylim(tcpa_ylim)
 
     # Risk (bottom-right)
     axs[1, 1].plot(tb[maskb], risk_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
     axs[1, 1].plot(tr[maskr], risk_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
+    axs[1, 1].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
     axs[1, 1].set_ylabel("Risk")
     axs[1, 1].set_title("Collision Risk (Max Across All Targets)")
     axs[1, 1].set_xlabel("Time (s)")
     axs[1, 1].grid(True, alpha=0.3)
-    axs[1, 1].legend(fontsize=10, loc="best")
+    axs[1, 1].legend(fontsize=9, loc="best")
     if risk_ylim is not None:
         axs[1, 1].set_ylim(risk_ylim)
 
@@ -323,14 +334,10 @@ def plot_ownship_threat_profile(
     title = "Ownship CPA Panel"
     if case is not None:
         title += f" | Case {case}"
-    if seed is not None:
-        title += f" | Seed {seed}"
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
     fig.tight_layout(rect=(0, 0, 1.0, 0.96))
     fig.savefig(save_path, dpi=300, bbox_inches="tight", format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, bbox_inches="tight", format='pdf')
     plt.close(fig)
     return save_path
 
@@ -339,176 +346,172 @@ def plot_full_trajectory_overlay(
     baseline_hist: dict,
     rl_hist: dict,
     save_path: str | Path,
-    show_goal: bool = True,
     show_all_targets: bool = True,
-    target_alpha: float = 0.7,
-    target_linewidth: float = 2.8,
-    show_target_labels: bool = False,
+    ship_icon_interval_s: float = 60.0,
+    ship_scale: float = 1.5,
 ) -> Path:
     """
-    Clean full-route comparison:
-    - ownship baseline vs RL
-    - optional nominal/reference trajectories for all target ships
-    - start/end markers
-    - optional goal marker
-    - NO CPA markers on the full plot
-    
-    Args:
-        target_alpha: Alpha transparency for target ships (default 0.7, more opaque for visibility)
-        target_linewidth: Line width for target ships (default 2.8, thicker for prominence)
-        show_target_labels: Whether to show "Target starts" label (default False for cleaner plot)
+    Full-route trajectory comparison in meters with periodic ship icons.
+    - Actual target trajectories (from baseline X_all)
+    - Ship icons at regular time intervals for all vessels
+    - Muted steel-blue for targets, black/purple for ownship
     """
 
-    _, Xb, _, _, _, _ = to_numpy_history(baseline_hist)
-    _, Xr, _, _, _, _ = to_numpy_history(rl_hist)
-
-    xb0, yb0 = xy_nmi(Xb, 0)
-    xr0, yr0 = xy_nmi(Xr, 0)
+    tb, Xb, _, _, _, _ = to_numpy_history(baseline_hist)
+    tr, Xr, _, _, _, _ = to_numpy_history(rl_hist)
 
     n_agents = Xb.shape[1]
 
-    fig, ax = plt.subplots(figsize=(13, 8))
+    fig, ax = plt.subplots(figsize=(14, 8))
 
     # --------------------------------------------------
-    # Plot all target ships as nominal straight-line paths
-    # using baseline history initial state for consistency
+    # Target ships: actual trajectories from baseline X_all
     # --------------------------------------------------
+    target_color = "#5B7FA5"  # muted steel-blue
     if show_all_targets and n_agents > 1:
-        # estimate route length from overall x-span of ownship tracks
-        ownship_span_guess = max(
-            np.ptp(xb0) if len(xb0) > 1 else 0.0,
-            np.ptp(xr0) if len(xr0) > 1 else 0.0,
-            1.0,
-        )
-
         for j in range(1, n_agents):
-            xt0 = Xb[0, j, 0] / NMI
-            yt0 = Xb[0, j, 1] / NMI
-            psi_t = float(Xb[0, j, 2])
-
-            # build straight nominal path from initial heading
-            xt_line = np.linspace(xt0, xt0 + ownship_span_guess * np.cos(psi_t), 100)
-            yt_line = np.linspace(yt0, yt0 + ownship_span_guess * np.sin(psi_t), 100)
-
+            xt = Xb[:, j, 0]
+            yt = Xb[:, j, 1]
             ax.plot(
-                xt_line,
-                yt_line,
-                linestyle="-",
-                linewidth=3.5,
-                alpha=target_alpha,
-                color="tab:cyan",
-                label="Target ships (nominal paths)" if j == 1 else None,
+                xt, yt,
+                linestyle="-", linewidth=2.0, alpha=0.5,
+                color=target_color,
+                label=f"Target ship {j}" if j == 1 else f"Target ship {j}",
                 zorder=1,
-            )
-
-            ax.scatter(
-                xt0,
-                yt0,
-                marker="s",
-                s=35,
-                alpha=min(0.9, target_alpha + 0.2),
-                color="tab:blue",
-                label="Target starts" if (j == 1 and show_target_labels) else None,
-                zorder=2,
             )
 
     # -----------------------
     # Ownship tracks
     # -----------------------
-    ax.plot(xb0, yb0, "--", color="black", linewidth=2.5, label="CORALL baseline ownship", zorder=3)
-    ax.plot(xr0, yr0, "-", color="purple", linewidth=2.5, label="RL policy ownship", zorder=3)
+    xb0, yb0 = Xb[:, 0, 0], Xb[:, 0, 1]
+    xr0, yr0 = Xr[:, 0, 0], Xr[:, 0, 1]
+
+    ax.plot(xb0, yb0, "--", color="black", linewidth=2.5,
+            label="CORALL baseline", zorder=3)
+    ax.plot(xr0, yr0, "-", color="purple", linewidth=2.5,
+            label="RL policy", zorder=3)
 
     # Start marker
-    ax.scatter(xb0[0], yb0[0], s=120, color="orange", label="Start", zorder=4)
+    ax.scatter(xb0[0], yb0[0], s=120, color="orange", label="Ownship start",
+               zorder=6, edgecolors="black", linewidth=0.8)
 
-    # Success zone (green acceptance region around final waypoint)
-    if show_goal:
-        from matplotlib.patches import Circle
-        # Average end positions of both ownships as goal location proxy
-        goal_x_avg = (xb0[-1] + xr0[-1]) / 2.0
-        goal_y_avg = (yb0[-1] + yr0[-1]) / 2.0
-        
-        # 200m = ~0.108 nmi acceptance radius
-        waypoint_radius_nmi = 0.200 / 1852.0
-        
-        circle_fill = Circle(
-            (goal_x_avg, goal_y_avg),
-            waypoint_radius_nmi,
-            fill=True,
-            facecolor="green",
-            edgecolor="darkgreen",
-            linewidth=2.0,
-            alpha=0.12,
-            zorder=1,
-            label="Success zone (200m radius)",
+    # Goal marker (simple X at ownship end)
+    goal_x = (xb0[-1] + xr0[-1]) / 2.0
+    goal_y = (yb0[-1] + yr0[-1]) / 2.0
+    ax.scatter(goal_x, goal_y, marker="X", s=150, color="darkgreen",
+               zorder=6, label="Goal")
+
+    # --------------------------------------------------
+    # Ship icons at regular time intervals
+    # --------------------------------------------------
+    LOA = 30.0  # meters
+    BEAM = 16.0  # meters
+
+    max_time = max(tb[-1], tr[-1])
+    icon_times = np.arange(ship_icon_interval_s, max_time, ship_icon_interval_s)
+
+    for t_icon in icon_times:
+        # Baseline time index
+        ib = int(np.argmin(np.abs(tb - t_icon)))
+        # RL time index (only if within episode)
+        ir = int(np.argmin(np.abs(tr - t_icon)))
+        rl_active = (tr[ir] <= tr[-1] + 1.0) and (abs(tr[ir] - t_icon) < ship_icon_interval_s)
+
+        # Target ship icons (from baseline data) – semi-transparent
+        if show_all_targets:
+            for j in range(1, n_agents):
+                patch = animate_ship(
+                    float(Xb[ib, j, 0]), float(Xb[ib, j, 1]), float(Xb[ib, j, 2]),
+                    LOA * ship_scale, BEAM * ship_scale,
+                    cpa=0.0, color=target_color, ax=ax,
+                )
+                patch.set_alpha(0.45)
+
+        # Baseline ownship icon
+        animate_ship(
+            float(Xb[ib, 0, 0]), float(Xb[ib, 0, 1]), float(Xb[ib, 0, 2]),
+            LOA * ship_scale, BEAM * ship_scale,
+            cpa=0.0, color="black", ax=ax,
         )
-        ax.add_patch(circle_fill)
-        
-        circle_boundary = Circle(
-            (goal_x_avg, goal_y_avg),
-            waypoint_radius_nmi,
-            fill=False,
-            edgecolor="darkgreen",
-            linewidth=2.0,
-            linestyle="-",
-            alpha=0.7,
-            zorder=4,
+
+        # RL ownship icon
+        if rl_active:
+            animate_ship(
+                float(Xr[ir, 0, 0]), float(Xr[ir, 0, 1]), float(Xr[ir, 0, 2]),
+                LOA * ship_scale, BEAM * ship_scale,
+                cpa=0.0, color="purple", ax=ax,
+            )
+
+        # Time labels: baseline in gray, RL in light purple
+        bx = float(Xb[ib, 0, 0])
+        by = float(Xb[ib, 0, 1])
+        ax.annotate(
+            f"{t_icon:.0f}s", (bx, by),
+            textcoords="offset points", xytext=(8, -10),
+            fontsize=6.5, color="#444444", alpha=0.65,
         )
-        ax.add_patch(circle_boundary)
-        
-        # Goal marker at center
-        ax.scatter(
-            goal_x_avg, goal_y_avg,
-            marker="X",
-            s=150,
-            color="darkgreen",
-            zorder=5,
-            label="Goal location",
-        )
+        if rl_active:
+            rx = float(Xr[ir, 0, 0])
+            ry = float(Xr[ir, 0, 1])
+            ax.annotate(
+                f"{t_icon:.0f}s", (rx, ry),
+                textcoords="offset points", xytext=(8, 8),
+                fontsize=6.5, color="#9966CC", alpha=0.65,
+            )
 
     ax.set_title(
-        f"Baseline vs RL trajectory | Imazu case {baseline_hist.get('case', '?')} | seed {baseline_hist.get('seed', '?')}",
-        fontsize=14,
-        fontweight="bold",
+        f"Baseline vs RL Trajectory | Imazu Case {baseline_hist.get('case', '?')} "
+        f"({n_agents} ships)",
+        fontsize=14, fontweight="bold",
     )
-    ax.set_xlabel("X position (nmi)")
-    ax.set_ylabel("Y position (nmi)")
+    ax.set_xlabel("X position (m)")
+    ax.set_ylabel("Y position (m)")
     ax.set_aspect("equal", adjustable="box")
-    ax.set_aspect("auto")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
+    ax.legend(loc="best", fontsize=9)
 
-    # bounds based on ownship and target nominal lines
+    # Compute bounds from all trajectories
     all_x = [xb0, xr0]
     all_y = [yb0, yr0]
-
     if show_all_targets and n_agents > 1:
         for j in range(1, n_agents):
-            xt0 = Xb[0, j, 0] / NMI
-            yt0 = Xb[0, j, 1] / NMI
-            psi_t = float(Xb[0, j, 2])
-            ownship_span_guess = max(
-                np.ptp(xb0) if len(xb0) > 1 else 0.0,
-                np.ptp(xr0) if len(xr0) > 1 else 0.0,
-                1.0,
-            )
-            xt_line = np.linspace(xt0, xt0 + ownship_span_guess * np.cos(psi_t), 100)
-            yt_line = np.linspace(yt0, yt0 + ownship_span_guess * np.sin(psi_t), 100)
-            all_x.append(xt_line)
-            all_y.append(yt_line)
+            all_x.append(Xb[:, j, 0])
+            all_y.append(Xb[:, j, 1])
 
     all_x = np.concatenate(all_x)
     all_y = np.concatenate(all_y)
 
-    xpad = max(0.3, 0.08 * max(1.0, np.ptp(all_x)))
-    ypad = max(0.15, 0.15 * max(0.5, np.ptp(all_y)))
-    ax.set_xlim(np.min(all_x) - xpad, np.max(all_x) + xpad)
-    ax.set_ylim(np.min(all_y) - ypad, np.max(all_y) + ypad)
+    xpad = max(200, 0.1 * max(1.0, np.ptp(all_x)))
+    ypad = max(200, 0.15 * max(1.0, np.ptp(all_y)))
+
+    xmin = float(np.min(all_x) - xpad)
+    xmax = float(np.max(all_x) + xpad)
+    ymin = float(np.min(all_y) - ypad)
+    ymax = float(np.max(all_y) + ypad)
+
+    # Pad shorter axis so the equal-aspect plot fills a consistent 14×8 figure
+    fig_w, fig_h = fig.get_size_inches()
+    desired_ratio = fig_h / fig_w  # ~0.57 for 14×8
+    x_range = xmax - xmin
+    y_range = ymax - ymin
+    if y_range / x_range < desired_ratio:
+        # y too short – expand vertically
+        needed = desired_ratio * x_range
+        mid_y = (ymin + ymax) / 2.0
+        ymin = mid_y - needed / 2.0
+        ymax = mid_y + needed / 2.0
+    else:
+        # x too short – expand horizontally
+        needed = y_range / desired_ratio
+        mid_x = (xmin + xmax) / 2.0
+        xmin = mid_x - needed / 2.0
+        xmax = mid_x + needed / 2.0
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
 
     fig.tight_layout()
-    fig.savefig(save_path, dpi=300, bbox_inches="tight", format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, bbox_inches="tight", format='pdf')
+    fig.savefig(save_path, dpi=300, format='png')
     plt.close(fig)
     return Path(save_path)
 
@@ -635,7 +638,7 @@ def plot_encounter_detail_clean(
     ax.set_aspect("equal", adjustable="box")
 
     ax.set_title(
-        f"Encounter detail | Imazu case {baseline_hist.get('case', '?')} | seed {baseline_hist.get('seed', '?')}",
+        f"Encounter detail | Imazu case {baseline_hist.get('case', '?')}",
         fontsize=14, fontweight="bold"
     )
     ax.set_xlabel("X position (nmi)")
@@ -644,8 +647,6 @@ def plot_encounter_detail_clean(
     ax.legend(loc="best")
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -677,8 +678,6 @@ def plot_risk_timeseries(
     ax.legend()
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
 
@@ -721,8 +720,6 @@ def plot_min_dcpa_timeseries(
     ax.legend()
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, format='png')
-    pdf_path = Path(str(save_path).replace('.png', '.pdf'))
-    fig.savefig(pdf_path, format='pdf')
     plt.close(fig)
     return Path(save_path)
     
@@ -1017,8 +1014,6 @@ def plot_episode_overlay(
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    pdf_path = output_path.with_suffix('.pdf')
-    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 
@@ -1076,8 +1071,6 @@ def plot_risk_dcpa_timeseries(
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    pdf_path = output_path.with_suffix('.pdf')
-    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 
@@ -1295,8 +1288,6 @@ def plot_encounter_overlay(
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    pdf_path = output_path.with_suffix('.pdf')
-    fig.savefig(pdf_path, bbox_inches='tight', format='pdf')
     plt.close(fig)
     return output_path
 

@@ -175,9 +175,10 @@ def aggregate_case_metrics(
                             baseline_time_s, rl_time_s,
                             n_episodes_baseline, n_episodes_rl
     """
-    # Find directories for this case
-    baseline_for_case = [d for d in baseline_dirs if f"case{case_num}" in d.name]
-    rl_for_case = [d for d in rl_dirs if f"case{case_num}" in d.name]
+    # Find directories for this case (use regex to match exact case number)
+    case_pattern = re.compile(rf"case{case_num}(?:\D|$)")
+    baseline_for_case = [d for d in baseline_dirs if case_pattern.search(d.name)]
+    rl_for_case = [d for d in rl_dirs if case_pattern.search(d.name)]
     
     if not baseline_for_case or not rl_for_case:
         return None
@@ -346,9 +347,8 @@ def create_bar_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
@@ -384,9 +384,8 @@ def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
@@ -422,9 +421,8 @@ def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
@@ -461,9 +459,8 @@ def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path):
@@ -498,9 +495,8 @@ def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
@@ -545,9 +541,8 @@ def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
@@ -616,26 +611,20 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     baseline_collision_arr = np.array(grouped_df['baseline_collision'].values, dtype=float) * 100
     rl_collision_arr = np.array(grouped_df['rl_collision'].values, dtype=float) * 100
     
-    fig = plt.figure(figsize=(16, 10))
-    gs = fig.add_gridspec(2, 3, hspace=0.35, wspace=0.3)
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
     
-    # ===== TOP ROW: EFFICIENCY METRICS =====
-    
-    # ===== Panel 1 (Top Left): Total Path Length Efficiency =====
-    ax = fig.add_subplot(gs[0, 0])
+    # ===== Panel 1 (Top Left): Total Path Length =====
+    ax = axs[0, 0]
     ax.plot(x, baseline_dist_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
     ax.plot(x, rl_dist_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
-    
-    # Add efficiency percentages (GREEN for shorter path, RED for longer)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_dist_arr[i] - 80, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
     ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
     ax.set_ylabel('Total Path Length (m)', fontsize=11, fontweight='bold')
     ax.set_title('Total Path Length', fontsize=12, fontweight='bold')
@@ -644,21 +633,18 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     ax.legend(fontsize=10, loc='best')
     ax.grid(True, alpha=0.3)
     
-    # ===== Panel 2 (Top Right): Total Time Travelled Efficiency =====
-    ax = fig.add_subplot(gs[0, 1])
+    # ===== Panel 2 (Top Right): Total Time Travelled =====
+    ax = axs[0, 1]
     ax.plot(x, baseline_time_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
     ax.plot(x, rl_time_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
-    
-    # Add efficiency percentages (GREEN for shorter time, RED for longer time - more time is worse)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_time_arr[i] + 10, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
     ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
     ax.set_ylabel('Total Time Travelled (s)', fontsize=11, fontweight='bold')
     ax.set_title('Total Time Travelled', fontsize=12, fontweight='bold')
@@ -667,32 +653,21 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     ax.legend(fontsize=10, loc='best')
     ax.grid(True, alpha=0.3)
     
-    # Blank panel for symmetry
-    ax = fig.add_subplot(gs[0, 2])
-    ax.axis('off')
-    
-    # ===== BOTTOM ROW: COLLISION AVOIDANCE / RISK METRICS =====
-    
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
-    ax = fig.add_subplot(gs[1, 0])
+    ax = axs[1, 0]
     ax.plot(x, baseline_sep_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
     ax.plot(x, rl_sep_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
-    
-    # Add desired min separation distance line (3 * LOA = 90m)
-    desired_sep = 90.0  # 3 * LOA (LOA=30m default)
+    desired_sep = 90.0
     ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=2.0, 
               label=f'Desired Min Sep (3×LOA = {desired_sep:.0f}m)', alpha=0.7)
-    
-    # Add efficiency percentages (GREEN for higher separation = safer, RED for lower)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_sep_arr[i] - 50, 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
     ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
     ax.set_ylabel('Minimum Separation Distance (m)', fontsize=11, fontweight='bold')
     ax.set_title('Min Separation Distance', fontsize=12, fontweight='bold')
@@ -701,21 +676,18 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     ax.legend(fontsize=10, loc='best')
     ax.grid(True, alpha=0.3)
     
-    # ===== Panel 4 (Bottom Center): Risk Exposure =====
-    ax = fig.add_subplot(gs[1, 1])
+    # ===== Panel 4 (Bottom Right): Risk Exposure =====
+    ax = axs[1, 1]
     ax.plot(x, baseline_risk_arr, 'o-', linewidth=2.5, markersize=8, 
            label='Baseline', color='black')
     ax.plot(x, rl_risk_arr, 's-', linewidth=2.5, markersize=8, 
            label='RL Policy', color='purple')
-    
-    # Add efficiency percentages (GREEN for lower risk, RED for higher)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_risk_arr[i] + 0.03 * baseline_risk_arr.max(), 
                f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
                color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
     ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
     ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=11, fontweight='bold')
     ax.set_title('Risk Exposure', fontsize=12, fontweight='bold')
@@ -724,35 +696,12 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     ax.legend(fontsize=10, loc='best')
     ax.grid(True, alpha=0.3)
     
-    # ===== Panel 5 (Bottom Right): Collision Rate =====
-    ax = fig.add_subplot(gs[1, 2])
-    ax.plot(x, baseline_collision_arr, 'o-', linewidth=2.5, markersize=8, 
-           label='Baseline', color='black')
-    ax.plot(x, rl_collision_arr, 's-', linewidth=2.5, markersize=8, 
-           label='RL Policy', color='purple')
-    
-    # Add efficiency percentages (GREEN for lower collision rate, RED for higher)
-    for i, (xi, eff) in enumerate(zip(x, grouped_df['collision_efficiency'])):
-        color = 'green' if eff > 0 else 'red'
-        symbol = '+' if eff > 0 else ''
-        ax.text(xi, rl_collision_arr[i] + 5, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    
-    ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Collision Rate (%)', fontsize=11, fontweight='bold')
-    ax.set_title('Collision Rate', fontsize=12, fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x])
-    ax.legend(fontsize=10, loc='best')
-    ax.grid(True, alpha=0.3)
-    
-    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count\n(Top: Efficiency | Bottom: Collision Avoidance & Risk)', 
-                fontsize=14, fontweight='bold', y=0.997)
-    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
-    fig.savefig(output_path.with_suffix('.pdf'), bbox_inches='tight', format='pdf')
+    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', 
+                fontsize=14, fontweight='bold')
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(output_path, dpi=150, format='png')
     plt.close(fig)
-    print(f"  Saved: {output_path.name} and {output_path.with_suffix('.pdf').name}")
+    print(f"  Saved: {output_path.name}")
 
 
 def main():

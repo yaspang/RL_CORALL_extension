@@ -243,7 +243,6 @@ def main():
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_dir / "training_return.png", dpi=300, format='png')
-    fig.savefig(output_dir / "training_return.pdf", format='pdf')
     plt.close(fig)
 
     print(f"Saved training plots to: {output_dir}")
