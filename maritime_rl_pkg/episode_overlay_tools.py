@@ -362,7 +362,7 @@ def plot_full_trajectory_overlay(
 
     n_agents = Xb.shape[1]
 
-    fig, ax = plt.subplots(figsize=(14, 8))
+    fig, ax = plt.subplots(figsize=(7, 4.5))
 
     # --------------------------------------------------
     # Target ships: actual trajectories from baseline X_all
@@ -374,7 +374,7 @@ def plot_full_trajectory_overlay(
             yt = Xb[:, j, 1]
             ax.plot(
                 xt, yt,
-                linestyle="-", linewidth=2.0, alpha=0.5,
+                linestyle="-", linewidth=1.5, alpha=0.5,
                 color=target_color,
                 label=f"Target ship {j}" if j == 1 else f"Target ship {j}",
                 zorder=1,
@@ -386,19 +386,19 @@ def plot_full_trajectory_overlay(
     xb0, yb0 = Xb[:, 0, 0], Xb[:, 0, 1]
     xr0, yr0 = Xr[:, 0, 0], Xr[:, 0, 1]
 
-    ax.plot(xb0, yb0, "--", color="black", linewidth=2.5,
+    ax.plot(xb0, yb0, "--", color="black", linewidth=1.8,
             label="CORALL baseline", zorder=3)
-    ax.plot(xr0, yr0, "-", color="purple", linewidth=2.5,
+    ax.plot(xr0, yr0, "-", color="purple", linewidth=1.8,
             label="RL policy", zorder=3)
 
     # Start marker
-    ax.scatter(xb0[0], yb0[0], s=120, color="orange", label="Ownship start",
-               zorder=6, edgecolors="black", linewidth=0.8)
+    ax.scatter(xb0[0], yb0[0], s=60, color="orange", label="Ownship start",
+               zorder=6, edgecolors="black", linewidth=0.6)
 
     # Goal marker (simple X at ownship end)
     goal_x = (xb0[-1] + xr0[-1]) / 2.0
     goal_y = (yb0[-1] + yr0[-1]) / 2.0
-    ax.scatter(goal_x, goal_y, marker="X", s=150, color="darkgreen",
+    ax.scatter(goal_x, goal_y, marker="X", s=80, color="darkgreen",
                zorder=6, label="Goal")
 
     # --------------------------------------------------
@@ -447,28 +447,29 @@ def plot_full_trajectory_overlay(
         by = float(Xb[ib, 0, 1])
         ax.annotate(
             f"{t_icon:.0f}s", (bx, by),
-            textcoords="offset points", xytext=(8, -10),
-            fontsize=6.5, color="#444444", alpha=0.65,
+            textcoords="offset points", xytext=(6, -8),
+            fontsize=5, color="#444444", alpha=0.65,
         )
         if rl_active:
             rx = float(Xr[ir, 0, 0])
             ry = float(Xr[ir, 0, 1])
             ax.annotate(
                 f"{t_icon:.0f}s", (rx, ry),
-                textcoords="offset points", xytext=(8, 8),
-                fontsize=6.5, color="#9966CC", alpha=0.65,
+                textcoords="offset points", xytext=(6, 6),
+                fontsize=5, color="#9966CC", alpha=0.65,
             )
 
     ax.set_title(
         f"Baseline vs RL Trajectory | Imazu Case {baseline_hist.get('case', '?')} "
         f"({n_agents} ships)",
-        fontsize=14, fontweight="bold",
+        fontsize=11, fontweight="bold",
     )
-    ax.set_xlabel("X position (m)")
-    ax.set_ylabel("Y position (m)")
+    ax.set_xlabel("X position (m)", fontsize=8)
+    ax.set_ylabel("Y position (m)", fontsize=8)
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=9)
+    ax.legend(loc="best", fontsize=7)
+    ax.tick_params(axis='both', labelsize=7)
 
     # Compute bounds from all trajectories
     all_x = [xb0, xr0]

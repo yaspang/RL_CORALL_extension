@@ -422,7 +422,12 @@ class MultiShipParallelEnv(ParallelEnv):
                     self.dt
                 )
 
-            risk = float(risk_calculations(dcpa, tcpa, dist, vrel))
+            risk = float(risk_calculations(
+                dcpa / 1852.0,    # meters → NMI
+                tcpa / 3600.0,    # seconds → hours
+                dist / 1852.0,    # meters → NMI
+                vrel,
+            ))
 
             self.pair_dcpa[a, b] = self.pair_dcpa[b, a] = float(dcpa)
             self.pair_tcpa[a, b] = self.pair_tcpa[b, a] = float(tcpa)
@@ -818,9 +823,8 @@ class MultiShipParallelEnv(ParallelEnv):
                 delta_progress = goal_progress - prev_progress
                 self.prev_goal_progress_all[agent] = goal_progress
                 
-                # SPARSE REWARD ONLY: Delta progress for milestone rewards
-                # Avoid continuous progress reward - it competes with risk penalty and causes aggressive behavior
-                w_along = 1.0
+                # Per-step progress reward scaled to compete with risk penalty
+                w_along = 1000.0
                 r_along = w_along * delta_progress                
             else:
                 # Agent already reached goal - no waypoint following reward
@@ -835,7 +839,7 @@ class MultiShipParallelEnv(ParallelEnv):
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
             
-            w_risk = -50.0
+            w_risk = -2.0
             total += w_risk * max_risk
         
 
@@ -860,12 +864,16 @@ class MultiShipParallelEnv(ParallelEnv):
 
             # separation margin reward: bonus to maintain safe distance
             safe_dist_m = LOA * 3.0
+            sep_cap_m = 500.0  # no reward/penalty beyond this range
             min_dist = float(np.min(pair_dist[k][np.isfinite(pair_dist[k])])) if np.any(np.isfinite(pair_dist[k])) else np.inf
 
             # Keep this term weak so it does not dominate episode return.
-            if min_dist > safe_dist_m:
+            if min_dist > sep_cap_m:
+                # Beyond cap: no separation reward (avoids rewarding staying far away)
+                pass
+            elif min_dist > safe_dist_m:
                 w_safe = 0.5
-                frac = 1.0 - (min_dist - safe_dist_m) / 5000.0
+                frac = 1.0 - (min_dist - safe_dist_m) / (sep_cap_m - safe_dist_m)
                 r_separation = w_safe * float(np.clip(frac, 0.0, 1.0))
                 total += r_separation
             elif min_dist > LOA and min_dist <= safe_dist_m:
@@ -878,25 +886,17 @@ class MultiShipParallelEnv(ParallelEnv):
             finite_d = np.isfinite(pair_dist[k])
             min_dist = float(np.min(pair_dist[k][finite_d])) if np.any(finite_d) else np.inf
             collision = (min_dist < LOA)
+
+            w_collision = -1000.0  # Massively penalize collision to incentivize avoidance
+
             if collision:
                 if self.episode_metrics[agent]["collision"] == 0:
                     self.episode_metrics[agent]["collision"] = 1
-            
-            # COLLISION PENALTY (OPTION 1 + 2): High penalty + prevent success bonus
-            # Option 1: Increase penalty to -500 (was -200) to make collision 2.5x costlier than success
-            # Option 2: Only grant success if NO collision occurred during episode
-            if collision:
-                w_collision = -1000.0  # Massively penalize collision to incentivize avoidance
                 total += w_collision
-            
-            
-            # Time penalty: small per-step cost to encourage faster completion
-            #w_time = -0.01
-            #total += w_time
             
 
             # Success: reached final wp and within radius 
-            dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
+            #dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
             progress_m, route_len_m, _ = self.route_progress(k)
             goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
             
@@ -916,7 +916,7 @@ class MultiShipParallelEnv(ParallelEnv):
             else:
                 final_reached = final_waypoint_reached_by_index
 
-            w_success = 200.0
+            w_success = 500.0
 
             # OPTION 2: Only grant success bonus if NO collision occurred during entire episode
             # This ensures agent learns to prioritize avoidance over reaching goal

@@ -60,6 +60,9 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         self.timesteps = []
         self.train_returns = []
         self.val_returns = []
+        self.returns_2ship = []
+        self.returns_3ship = []
+        self.returns_4ship = []
         self.episode_counter = 0
         self.logger_keys_printed = False
         self.valid_key = None
@@ -76,7 +79,7 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         
         # Log metrics periodically
         if self.num_timesteps % 1000 == 0 and self.num_timesteps > 0:
-            # Training return: mean of all episodes up to now
+            # Training return: windowed mean of recent episodes
             train_return = self._get_mean_episode_return()
             
             # Validation return: mean of only recent episodes (last ~10% of what we've seen)
@@ -86,8 +89,21 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
             self.train_returns.append(train_return)
             self.val_returns.append(val_return)
             
+            # Per-ship-count returns
+            by_ships = {}
+            if self.episode_tracker is not None:
+                by_ships = self.episode_tracker.get_mean_return_by_ships()
+            self.returns_2ship.append(by_ships.get(2, np.nan))
+            self.returns_3ship.append(by_ships.get(3, np.nan))
+            self.returns_4ship.append(by_ships.get(4, np.nan))
+            
             if self.verbose:
-                print(f"[Step {self.num_timesteps:7d}] Train Return: {train_return:10.2f}  Validation Return: {val_return:10.2f}")
+                parts = [f"[Step {self.num_timesteps:7d}] Return: {train_return:8.1f}"]
+                for ns in [2, 3, 4]:
+                    v = by_ships.get(ns, np.nan)
+                    if not np.isnan(v):
+                        parts.append(f"{ns}ship:{v:8.1f}")
+                print("  ".join(parts))
         
         return True
     
@@ -181,8 +197,9 @@ def create_output_dir(timestamp: str) -> Path:
     return output_dir
 
 
-def plot_training_convergence(timesteps: list, train_returns: list, val_returns: list, output_path: Path):
-    """Plot training convergence curve with train and validation signals."""
+def plot_training_convergence(timesteps: list, train_returns: list, val_returns: list, output_path: Path,
+                              returns_2ship: list = None, returns_3ship: list = None, returns_4ship: list = None):
+    """Plot training convergence curve with train and per-ship-count breakdowns."""
     if not timesteps or not train_returns:
         print("  [Skipped convergence plot - no training data collected]")
         return
@@ -191,55 +208,30 @@ def plot_training_convergence(timesteps: list, train_returns: list, val_returns:
     
     fig, ax = plt.subplots(figsize=(14, 7))
     
-    # Convert to millions of steps for readability
     timesteps_m = np.array(timesteps) / 1e6
     
-    # Plot training returns
+    # Plot overall training returns
     ax.plot(timesteps_m, train_returns, linewidth=2.5, marker='o', 
-            markersize=7, color='steelblue', label='Training Return', zorder=3)
+            markersize=5, color='steelblue', label='Overall (last 50 ep)', zorder=3)
     
-    # Plot validation returns if they exist and if they are real values (not all NaN or zero)
-    has_validation = (
-        val_returns
-        and len(val_returns) == len(train_returns)
-        and np.any(np.isfinite(val_returns))
-    )
-
-    if has_validation:
-        finite_mask = np.isfinite(val_returns)
-        ax.plot(
-            timesteps_m[finite_mask],
-            np.array(val_returns)[finite_mask],
-            linewidth=2.5,
-            marker='s',
-            markersize=7,
-            color='coral',
-            label='Validation Return',
-            zorder=3,
-        )
-
-
-    are_different = False # initialize at function scope for later use
-    if has_validation:
-        # Check if validation is actually different from training
-        are_different = not np.allclose(train_returns, val_returns)
-        if are_different:
-            ax.plot(timesteps_m, val_returns, linewidth=2.5, marker='s', 
-                    markersize=7, color='coral', label='Validation Return', zorder=3)
+    # Plot per-ship-count returns
+    ship_colors = {2: '#2ca02c', 3: '#ff7f0e', 4: '#d62728'}
+    ship_labels = {2: '2-ship cases', 3: '3-ship cases', 4: '4-ship cases'}
+    for n_ships, data in [(2, returns_2ship), (3, returns_3ship), (4, returns_4ship)]:
+        if data and len(data) == len(timesteps):
+            arr = np.array(data, dtype=float)
+            mask = np.isfinite(arr)
+            if np.any(mask):
+                ax.plot(timesteps_m[mask], arr[mask], linewidth=1.5, alpha=0.7,
+                        color=ship_colors[n_ships], label=ship_labels[n_ships], zorder=2)
     
-    # Add trend lines (moving average)
+    # Add trend line
     if len(train_returns) > 3:
         window = max(1, len(train_returns) // 5)
-        
         train_trend = np.convolve(train_returns, np.ones(window)/window, mode='valid')
         trend_timesteps = timesteps_m[window-1:]
         ax.plot(trend_timesteps, train_trend, linewidth=2.5, linestyle='--', 
-                color='navy', alpha=0.6, label='Training Trend', zorder=2)
-        
-        if has_validation and are_different:
-            val_trend = np.convolve(val_returns, np.ones(window)/window, mode='valid')
-            ax.plot(trend_timesteps, val_trend, linewidth=2.5, linestyle='--', 
-                    color='darkred', alpha=0.6, label='Validation Trend', zorder=2)
+                color='navy', alpha=0.6, label='Overall Trend', zorder=2)
     
     ax.set_xlabel('Training Steps (Millions)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Episode Return', fontsize=12, fontweight='bold')
@@ -399,7 +391,10 @@ def main():
         print(f"\nGenerating convergence plots...")
         plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns, 
                                  metrics_callback.val_returns,
-                                 output_dir / "training_convergence.png")
+                                 output_dir / "training_convergence.png",
+                                 returns_2ship=metrics_callback.returns_2ship,
+                                 returns_3ship=metrics_callback.returns_3ship,
+                                 returns_4ship=metrics_callback.returns_4ship)
         
         # Save training config
         config = {

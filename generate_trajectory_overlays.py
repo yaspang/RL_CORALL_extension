@@ -115,8 +115,11 @@ def main():
                         help="Case numbers to generate overlays for")
     parser.add_argument("--output_dir", type=Path, default=Path("Visualizations/trajectory_overlays"),
                         help="Output directory for plots")
+    parser.add_argument("--base_dir", type=Path, default=None,
+                        help="Base directory containing eval/baseline dirs (default: project root)")
     args = parser.parse_args()
 
+    search_dir = args.base_dir if args.base_dir else BASE_DIR
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for case_num in args.cases:
@@ -125,8 +128,8 @@ def main():
         print(f"{'='*60}")
 
         # Find directories
-        rl_dir = find_case_dir(BASE_DIR, case_num, "policy_eval")
-        bl_dir = find_case_dir(BASE_DIR, case_num, "corall_baseline_case")
+        rl_dir = find_case_dir(search_dir, case_num, "policy_eval")
+        bl_dir = find_case_dir(search_dir, case_num, "corall_baseline_case")
 
         if not rl_dir:
             print(f"  ERROR: No RL eval directory found for case {case_num}")

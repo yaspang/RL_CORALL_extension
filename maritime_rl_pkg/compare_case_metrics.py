@@ -611,95 +611,99 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     baseline_collision_arr = np.array(grouped_df['baseline_collision'].values, dtype=float) * 100
     rl_collision_arr = np.array(grouped_df['rl_collision'].values, dtype=float) * 100
     
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axs = plt.subplots(2, 2, figsize=(7, 5.5))
     
     # ===== Panel 1 (Top Left): Total Path Length =====
     ax = axs[0, 0]
-    ax.plot(x, baseline_dist_arr, 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, 
            label='Baseline', color='black')
-    ax.plot(x, rl_dist_arr, 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, 
            label='RL Policy', color='purple')
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_dist_arr[i] - 80, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Total Path Length (m)', fontsize=11, fontweight='bold')
-    ax.set_title('Total Path Length', fontsize=12, fontweight='bold')
+               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
+               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=8)
+    ax.set_ylabel('Total Path Length (m)', fontsize=8)
+    ax.set_title('Total Path Length', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x])
-    ax.legend(fontsize=10, loc='best')
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
+    ax.tick_params(axis='y', labelsize=7)
+    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 2 (Top Right): Total Time Travelled =====
     ax = axs[0, 1]
-    ax.plot(x, baseline_time_arr, 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, 
            label='Baseline', color='black')
-    ax.plot(x, rl_time_arr, 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, 
            label='RL Policy', color='purple')
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_time_arr[i] + 10, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Total Time Travelled (s)', fontsize=11, fontweight='bold')
-    ax.set_title('Total Time Travelled', fontsize=12, fontweight='bold')
+               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
+               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=8)
+    ax.set_ylabel('Total Time Travelled (s)', fontsize=8)
+    ax.set_title('Total Time Travelled', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x])
-    ax.legend(fontsize=10, loc='best')
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
+    ax.tick_params(axis='y', labelsize=7)
+    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
     ax = axs[1, 0]
-    ax.plot(x, baseline_sep_arr, 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, 
            label='Baseline', color='black')
-    ax.plot(x, rl_sep_arr, 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, 
            label='RL Policy', color='purple')
     desired_sep = 90.0
-    ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=2.0, 
+    ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=1.5, 
               label=f'Desired Min Sep (3×LOA = {desired_sep:.0f}m)', alpha=0.7)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_sep_arr[i] - 50, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=11, fontweight='bold')
-    ax.set_title('Min Separation Distance', fontsize=12, fontweight='bold')
+               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
+               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=8)
+    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=8)
+    ax.set_title('Min Separation Distance', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x])
-    ax.legend(fontsize=10, loc='best')
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
+    ax.tick_params(axis='y', labelsize=7)
+    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 4 (Bottom Right): Risk Exposure =====
     ax = axs[1, 1]
-    ax.plot(x, baseline_risk_arr, 'o-', linewidth=2.5, markersize=8, 
+    ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, 
            label='Baseline', color='black')
-    ax.plot(x, rl_risk_arr, 's-', linewidth=2.5, markersize=8, 
+    ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, 
            label='RL Policy', color='purple')
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.text(xi, rl_risk_arr[i] + 0.03 * baseline_risk_arr.max(), 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=10, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=11, fontweight='bold')
-    ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=11, fontweight='bold')
-    ax.set_title('Risk Exposure', fontsize=12, fontweight='bold')
+               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
+               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=8)
+    ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=8)
+    ax.set_title('Risk Exposure', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x])
-    ax.legend(fontsize=10, loc='best')
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
+    ax.tick_params(axis='y', labelsize=7)
+    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', 
-                fontsize=14, fontweight='bold')
+                fontsize=12, fontweight='bold')
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig(output_path, dpi=150, format='png')
+    fig.savefig(output_path, dpi=300, format='png')
     plt.close(fig)
     print(f"  Saved: {output_path.name}")
 
