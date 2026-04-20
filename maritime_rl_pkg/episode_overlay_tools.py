@@ -517,6 +517,144 @@ def plot_full_trajectory_overlay(
     return Path(save_path)
 
 
+def plot_stacked_trajectory_overlay(
+    case_data: list[tuple[dict, dict, int]],
+    save_path: str | Path,
+    ship_icon_interval_s: float = 60.0,
+    ship_scale: float = 1.2,
+) -> Path:
+    """
+    Stacked trajectory overlay for multiple cases in a single IEEE-ready figure.
+
+    Parameters
+    ----------
+    case_data : list of (baseline_hist, rl_hist, case_num) tuples
+    save_path : output path for the figure
+    """
+    n_cases = len(case_data)
+    fig, axes = plt.subplots(n_cases, 1, figsize=(7, 3.2 * n_cases))
+    if n_cases == 1:
+        axes = [axes]
+
+    target_color = "#5B7FA5"
+    LOA = 30.0
+    BEAM = 16.0
+    ship_labels = {2: "2 ships", 3: "3 ships", 4: "4 ships"}
+
+    for row, (baseline_hist, rl_hist, case_num) in enumerate(case_data):
+        ax = axes[row]
+        tb, Xb, _, _, _, _ = to_numpy_history(baseline_hist)
+        tr, Xr, _, _, _, _ = to_numpy_history(rl_hist)
+        n_agents = Xb.shape[1]
+
+        # Target trajectories
+        if n_agents > 1:
+            for j in range(1, n_agents):
+                lbl = f"Target ship {j}" if row == 0 else None
+                ax.plot(Xb[:, j, 0], Xb[:, j, 1], "-", linewidth=1.2,
+                        alpha=0.45, color=target_color, label=lbl, zorder=1)
+
+        # Ownship tracks
+        xb0, yb0 = Xb[:, 0, 0], Xb[:, 0, 1]
+        xr0, yr0 = Xr[:, 0, 0], Xr[:, 0, 1]
+
+        lbl_bl = "CORALL baseline" if row == 0 else None
+        lbl_rl = "RL policy" if row == 0 else None
+        ax.plot(xb0, yb0, "--", color="black", linewidth=1.5, label=lbl_bl, zorder=3)
+        ax.plot(xr0, yr0, "-", color="purple", linewidth=1.5, label=lbl_rl, zorder=3)
+
+        # Start / goal markers
+        lbl_start = "Ownship start" if row == 0 else None
+        lbl_goal = "Goal" if row == 0 else None
+        ax.scatter(xb0[0], yb0[0], s=40, color="orange", label=lbl_start,
+                   zorder=6, edgecolors="black", linewidth=0.5)
+        goal_x = (xb0[-1] + xr0[-1]) / 2.0
+        goal_y = (yb0[-1] + yr0[-1]) / 2.0
+        ax.scatter(goal_x, goal_y, marker="X", s=50, color="darkgreen",
+                   zorder=6, label=lbl_goal)
+
+        # Ship icons at intervals
+        max_time = max(tb[-1], tr[-1])
+        icon_times = np.arange(ship_icon_interval_s, max_time, ship_icon_interval_s)
+        for t_icon in icon_times:
+            ib_idx = int(np.argmin(np.abs(tb - t_icon)))
+            ir_idx = int(np.argmin(np.abs(tr - t_icon)))
+            rl_active = (tr[ir_idx] <= tr[-1] + 1.0) and (abs(tr[ir_idx] - t_icon) < ship_icon_interval_s)
+
+            if n_agents > 1:
+                for j in range(1, n_agents):
+                    p = animate_ship(
+                        float(Xb[ib_idx, j, 0]), float(Xb[ib_idx, j, 1]), float(Xb[ib_idx, j, 2]),
+                        LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color=target_color, ax=ax,
+                    )
+                    p.set_alpha(0.35)
+
+            animate_ship(
+                float(Xb[ib_idx, 0, 0]), float(Xb[ib_idx, 0, 1]), float(Xb[ib_idx, 0, 2]),
+                LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="black", ax=ax,
+            )
+            if rl_active:
+                animate_ship(
+                    float(Xr[ir_idx, 0, 0]), float(Xr[ir_idx, 0, 1]), float(Xr[ir_idx, 0, 2]),
+                    LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="purple", ax=ax,
+                )
+
+        # Panel title
+        ax.set_title(
+            f"Case {case_num} ({n_agents} ships)",
+            fontsize=16, fontweight="bold",
+        )
+        ax.set_ylabel("Y position (m)", fontsize=14, fontweight="bold")
+        ax.set_aspect("equal", adjustable="box")
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='both', labelsize=12)
+
+        # Compute bounds
+        all_x = [xb0, xr0]
+        all_y = [yb0, yr0]
+        if n_agents > 1:
+            for j in range(1, n_agents):
+                all_x.append(Xb[:, j, 0])
+                all_y.append(Xb[:, j, 1])
+        all_x = np.concatenate(all_x)
+        all_y = np.concatenate(all_y)
+
+        xpad = max(150, 0.08 * max(1.0, np.ptp(all_x)))
+        ypad = max(150, 0.12 * max(1.0, np.ptp(all_y)))
+        xmin, xmax = float(np.min(all_x) - xpad), float(np.max(all_x) + xpad)
+        ymin, ymax = float(np.min(all_y) - ypad), float(np.max(all_y) + ypad)
+
+        # Pad to fill subplot aspect
+        ax_aspect = 3.2 / 7.0  # row height / figure width
+        x_range = xmax - xmin
+        y_range = ymax - ymin
+        if y_range / x_range < ax_aspect:
+            needed = ax_aspect * x_range
+            mid_y = (ymin + ymax) / 2.0
+            ymin, ymax = mid_y - needed / 2.0, mid_y + needed / 2.0
+        else:
+            needed = y_range / ax_aspect
+            mid_x = (xmin + xmax) / 2.0
+            xmin, xmax = mid_x - needed / 2.0, mid_x + needed / 2.0
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+
+    # Only bottom panel gets x-label
+    axes[-1].set_xlabel("X position (m)", fontsize=14, fontweight="bold")
+
+    # Single legend at top
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
+               fontsize=12, framealpha=0.9, bbox_to_anchor=(0.5, 1.0),
+               prop={'weight': 'bold'})
+
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(save_path, dpi=300, format='png', bbox_inches='tight')
+    plt.close(fig)
+    return Path(save_path)
+
+
 def plot_encounter_detail_clean(
     baseline_hist: dict,
     rl_hist: dict,

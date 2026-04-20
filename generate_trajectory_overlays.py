@@ -20,6 +20,7 @@ from maritime_rl_pkg.episode_overlay_tools import (
     plot_full_trajectory_overlay,
     plot_encounter_detail_clean,
     plot_ownship_threat_profile,
+    plot_stacked_trajectory_overlay,
 )
 
 BASE_DIR = Path(__file__).parent
@@ -122,6 +123,8 @@ def main():
     search_dir = args.base_dir if args.base_dir else BASE_DIR
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    stacked_data = []  # collect (bl_hist, rl_hist, case_num) for stacked figure
+
     for case_num in args.cases:
         print(f"\n{'='*60}")
         print(f"Case {case_num}")
@@ -184,6 +187,16 @@ def main():
         print(f"  Generating threat profile...")
         plot_ownship_threat_profile(bl_hist, rl_hist, threat_path)
         print(f"    Saved: {threat_path.name}")
+
+        # Collect data for stacked figure
+        stacked_data.append((bl_hist, rl_hist, case_num))
+
+    # Generate stacked trajectory figure if we have multiple cases
+    if len(stacked_data) >= 2:
+        stacked_path = args.output_dir / "trajectory_comparison_stacked.png"
+        print(f"\nGenerating stacked trajectory figure ({len(stacked_data)} cases)...")
+        plot_stacked_trajectory_overlay(stacked_data, stacked_path)
+        print(f"  Saved: {stacked_path.name}")
 
     print(f"\nAll plots saved to: {args.output_dir}")
 
