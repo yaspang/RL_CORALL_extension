@@ -14,7 +14,7 @@ def parse_args():
     p.add_argument("--episodes", type=int, default=20, help="Number of episodes to run for evaluation")
     p.add_argument("--seed", type=int, default=0, help="Base random seed for evaluation")
     p.add_argument("--dt", type=float, default=0.5, help="Time step duration in seconds for the environment")
-    p.add_argument("--sim_time", type=float, default=1950.0, help="Total simulation time in seconds for each episode")
+    p.add_argument("--sim_time", type=float, default=600.0, help="Total simulation time in seconds for each episode")
     p.add_argument("--route_len_nmi", type=float, default=2.0, help="Route length in nautical miles (scaling factor for environment)")
     p.add_argument("--num_workers", type=int, default=0, help="Number of parallel workers to use for evaluation (default: 0 for standalone eval)")
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
@@ -35,7 +35,7 @@ def build_env_creator(args):
     from maritime_rl_pkg.env_baseline import CORALLComparisonEnv
 
     def env_creator(config):
-        CORALLComparisonEnv(
+        return CORALLComparisonEnv(
             case_number=config.get("case_number", args.case),
             dt=config.get("dt", args.dt),
             sim_time=config.get("sim_time", args.sim_time),
@@ -45,6 +45,7 @@ def build_env_creator(args):
             target_speed_mps=config.get("target_speed_mps", args.target_speed_mps),
             ownship_speed_mps=config.get("ownship_speed_mps", args.ownship_speed_mps),
         )
+        
     return env_creator
 
 

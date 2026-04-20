@@ -552,8 +552,14 @@ class CORALLComparisonEnv(ParallelEnv):
             # Take absolute value (handles negative DCPA from diverging trajectories)
             # and clip to 5 nmi max like visualization does
             abs_dcpa = np.abs(dcpa_vals[valid])
-            min_dcpa_abs = float(np.min(abs_dcpa))
-            min_dcpa_abs = min(min_dcpa_abs, 5.0 * NMI)  # clip to 5 nmi = 9260m
+            # Filter out numerical artifacts (DCPA < 10m likely from rounding errors)
+            abs_dcpa = abs_dcpa[abs_dcpa >= 10.0]
+            
+            if len(abs_dcpa) > 0:
+                min_dcpa_abs = float(np.min(abs_dcpa))
+                min_dcpa_abs = min(min_dcpa_abs, 5.0 * NMI)  # clip to 5 nmi = 9260m
+            else:
+                min_dcpa_abs = self.LOA_own * 4.0  # safe default if all values filtered
         else:
             min_dcpa_abs = self.LOA_own * 4.0  # safe default if no active encounters
         

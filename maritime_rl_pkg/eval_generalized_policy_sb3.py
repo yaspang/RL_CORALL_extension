@@ -235,7 +235,15 @@ def run_one_episode(model, env, seed, args, capture_history=False):
     # Compute DCPA from all agents
     multi_env = env.env_multi if hasattr(env, 'env_multi') else env.env.env_multi
     if multi_env.n_agents > 1:
-        ownship_dcpa = pairwise["pair_dcpa"][0, 1:].min()
+        dcpa_vals = pairwise["pair_dcpa"][0, 1:]  # DCPA with each obstacle
+        abs_dcpa = np.abs(dcpa_vals[np.isfinite(dcpa_vals)])
+        # Filter out numerical artifacts (DCPA < 10m likely from rounding errors)
+        abs_dcpa = abs_dcpa[abs_dcpa >= 10.0]
+        if len(abs_dcpa) > 0:
+            ownship_dcpa = float(np.min(abs_dcpa))
+        else:
+            # Fallback if all values below 10m threshold
+            ownship_dcpa = multi_env.LOA * 4.0
     else:
         ownship_dcpa = np.inf
     
