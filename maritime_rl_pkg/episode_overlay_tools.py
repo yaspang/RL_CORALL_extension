@@ -646,7 +646,7 @@ def plot_stacked_trajectory_overlay(
     # Single legend at top
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
-               fontsize=12, framealpha=0.9, bbox_to_anchor=(0.5, 1.0),
+               fontsize=12, framealpha=0.9, bbox_to_anchor=(0.5, 0.94),
                prop={'weight': 'bold'})
 
     fig.tight_layout(rect=(0, 0, 1, 0.96))

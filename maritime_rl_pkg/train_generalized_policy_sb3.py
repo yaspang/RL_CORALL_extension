@@ -46,6 +46,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
+from maritime_rl_pkg.env_reward_normalizer import RewardNormalizerByShipCount
 from maritime_rl_pkg.episode_tracker import EpisodeReturnTracker
 
 
@@ -260,10 +261,14 @@ def main():
                         help="Learning rate (default: 3e-4)")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor (default: 0.99)")
-    parser.add_argument("--train_batch", type=int, default=256,
-                        help="Training batch size (default: 256)")
-    parser.add_argument("--rollout_frag", type=int, default=128,
-                        help="Rollout fragment length (default: 128)")
+    parser.add_argument("--train_batch", type=int, default=512,
+                        help="Training batch size (default: 512)")
+    parser.add_argument("--rollout_frag", type=int, default=256,
+                        help="Rollout fragment length (default: 256)")
+    parser.add_argument("--normalize_rewards", action="store_true", default=True,
+                        help="Normalize rewards by scenario type for smoother training (default: True)")
+    parser.add_argument("--no_normalize_rewards", dest="normalize_rewards", action="store_false",
+                        help="Disable reward normalization (for ablation studies)")
     parser.add_argument("--mlp_hiddens", type=int, nargs=2, default=[128, 128],
                         help="MLP hidden layer sizes (default: 128 128)")
     parser.add_argument("--seed", type=int, default=0,
@@ -292,7 +297,10 @@ def main():
     print(f"  Total steps:               {args.num_steps:,}")
     print(f"  Checkpoint freq:           {args.checkpoint_freq:,}")
     print(f"  Parallel workers:          {args.num_workers}")
+    print(f"  Batch size:                {args.train_batch}")
+    print(f"  Rollout fragment length:   {args.rollout_frag}")
     print(f"  Learning rate:             {args.lr}")
+    print(f"  Reward normalization:      {'ON (by scenario type)' if args.normalize_rewards else 'OFF'}")
     print(f"  Desired encounter distance (nmi): {args.desired_cross_x_nmi}")
     print(f"  Obstacle speed (m/s):      {args.target_speed_mps}")
     print(f"  Ownship speed (m/s):       {args.ownship_speed_mps if args.ownship_speed_mps else 'inherit from obstacles'}")
@@ -320,6 +328,9 @@ def main():
             target_speed_mps=args.target_speed_mps,
             ownship_speed_mps=args.ownship_speed_mps,
         )
+        
+        # Wrap with reward normalizer to stabilize training across scenario types
+        env = RewardNormalizerByShipCount(env, normalize_rewards=args.normalize_rewards, verbose=False)
         
         # Wrap with Monitor for proper episode return tracking
         env = Monitor(env)
@@ -406,6 +417,7 @@ def main():
             "train_batch_size": args.train_batch,
             "rollout_fragment_length": args.rollout_frag,
             "mlp_hiddens": args.mlp_hiddens,
+            "normalize_rewards": args.normalize_rewards,
             "seed": args.seed,
             "cases_trained": args.cases,
             "num_seeds": 100,

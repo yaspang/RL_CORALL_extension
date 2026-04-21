@@ -256,34 +256,50 @@ def aggregate_case_metrics(
         except Exception as e:
             print(f"    Warning: Failed to compute RL metrics: {e}")
     
-    # Average metrics
+    # Average and std metrics
     baseline_min_sep_avg = np.mean(baseline_min_sep_vals) if baseline_min_sep_vals else np.nan
     rl_min_sep_avg = np.mean(rl_min_sep_vals) if rl_min_sep_vals else np.nan
-    
+    baseline_min_sep_std = np.std(baseline_min_sep_vals, ddof=1) if len(baseline_min_sep_vals) > 1 else np.nan
+    rl_min_sep_std = np.std(rl_min_sep_vals, ddof=1) if len(rl_min_sep_vals) > 1 else np.nan
+
     baseline_risk_avg = np.mean(baseline_risk_vals) if baseline_risk_vals else np.nan
     rl_risk_avg = np.mean(rl_risk_vals) if rl_risk_vals else np.nan
-    
+    baseline_risk_std = np.std(baseline_risk_vals, ddof=1) if len(baseline_risk_vals) > 1 else np.nan
+    rl_risk_std = np.std(rl_risk_vals, ddof=1) if len(rl_risk_vals) > 1 else np.nan
+
     baseline_dist_avg = np.mean(baseline_distances) if baseline_distances else np.nan
     rl_dist_avg = np.mean(rl_distances) if rl_distances else np.nan
-    
+    baseline_dist_std = np.std(baseline_distances, ddof=1) if len(baseline_distances) > 1 else np.nan
+    rl_dist_std = np.std(rl_distances, ddof=1) if len(rl_distances) > 1 else np.nan
+
     baseline_time_avg = np.mean(baseline_times) if baseline_times else np.nan
     rl_time_avg = np.mean(rl_times) if rl_times else np.nan
-    
+    baseline_time_std = np.std(baseline_times, ddof=1) if len(baseline_times) > 1 else np.nan
+    rl_time_std = np.std(rl_times, ddof=1) if len(rl_times) > 1 else np.nan
+
     baseline_collision_rate = np.mean(baseline_collisions) if baseline_collisions else np.nan
     rl_collision_rate = np.mean(rl_collisions) if rl_collisions else np.nan
-    
+
     return {
         'case': case_num,
         'n_agents': n_agents,
         'n_additional_agents': n_additional_agents,
         'baseline_min_sep_nmi': baseline_min_sep_avg,
+        'baseline_min_sep_nmi_std': baseline_min_sep_std,
         'rl_min_sep_nmi': rl_min_sep_avg,
+        'rl_min_sep_nmi_std': rl_min_sep_std,
         'baseline_risk_exposure': baseline_risk_avg,
+        'baseline_risk_exposure_std': baseline_risk_std,
         'rl_risk_exposure': rl_risk_avg,
+        'rl_risk_exposure_std': rl_risk_std,
         'baseline_dist_m': baseline_dist_avg,
+        'baseline_dist_m_std': baseline_dist_std,
         'rl_dist_m': rl_dist_avg,
+        'rl_dist_m_std': rl_dist_std,
         'baseline_time_s': baseline_time_avg,
+        'baseline_time_s_std': baseline_time_std,
         'rl_time_s': rl_time_avg,
+        'rl_time_s_std': rl_time_std,
         'baseline_collision_rate': baseline_collision_rate,
         'rl_collision_rate': rl_collision_rate,
         'n_episodes_baseline': len(baseline_distances),
@@ -551,32 +567,34 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     grouped_data = []
     for agent_count in sorted(metrics_df['n_agents'].unique()):
         group = metrics_df[metrics_df['n_agents'] == agent_count]
-        
-        baseline_sep = group['baseline_min_sep_nmi'].mean() * NMI  # Convert to meters
-        rl_sep = group['rl_min_sep_nmi'].mean() * NMI  # Convert to meters
-        # For separation: HIGHER is better, so if RL is higher (positive efficiency) = green
-        sep_efficiency = ((rl_sep - baseline_sep) / baseline_sep * 100) if baseline_sep > 0 else 0
-        
+        # Means
+        baseline_sep = group['baseline_min_sep_nmi'].mean() * NMI  # meters
+        rl_sep = group['rl_min_sep_nmi'].mean() * NMI
         baseline_risk = group['baseline_risk_exposure'].mean()
         rl_risk = group['rl_risk_exposure'].mean()
-        # For risk: LOWER is better, so if RL is lower (positive efficiency) = green
-        risk_efficiency = ((baseline_risk - rl_risk) / baseline_risk * 100) if baseline_risk > 0 else 0
-        
         baseline_dist = group['baseline_dist_m'].mean()
         rl_dist = group['rl_dist_m'].mean()
-        # For distance: LOWER is better, so if RL is lower (positive efficiency) = green
-        dist_efficiency = ((baseline_dist - rl_dist) / baseline_dist * 100)
-        
         baseline_time = group['baseline_time_s'].mean()
         rl_time = group['rl_time_s'].mean()
-        # For time: LOWER is better, so if RL is lower (positive efficiency) = green
-        time_efficiency = ((baseline_time - rl_time) / baseline_time * 100)
-        
         baseline_collision = group['baseline_collision_rate'].mean()
         rl_collision = group['rl_collision_rate'].mean()
-        # For collision rate: LOWER is better, so if RL is lower (positive efficiency) = green
+        # Efficiencies
+        sep_efficiency = ((rl_sep - baseline_sep) / baseline_sep * 100) if baseline_sep > 0 else 0
+        risk_efficiency = ((baseline_risk - rl_risk) / baseline_risk * 100) if baseline_risk > 0 else 0
+        dist_efficiency = ((baseline_dist - rl_dist) / baseline_dist * 100) if baseline_dist > 0 else 0
+        time_efficiency = ((baseline_time - rl_time) / baseline_time * 100) if baseline_time > 0 else 0
         collision_efficiency = ((baseline_collision - rl_collision) / max(baseline_collision, 0.001) * 100)
-        
+
+        # STDs (use std, fallback to nan if not present)
+        baseline_sep_std = group['baseline_min_sep_nmi_std'].mean() * NMI if 'baseline_min_sep_nmi_std' in group else np.nan
+        rl_sep_std = group['rl_min_sep_nmi_std'].mean() * NMI if 'rl_min_sep_nmi_std' in group else np.nan
+        baseline_risk_std = group['baseline_risk_exposure_std'].mean() if 'baseline_risk_exposure_std' in group else np.nan
+        rl_risk_std = group['rl_risk_exposure_std'].mean() if 'rl_risk_exposure_std' in group else np.nan
+        baseline_dist_std = group['baseline_dist_m_std'].mean() if 'baseline_dist_m_std' in group else np.nan
+        rl_dist_std = group['rl_dist_m_std'].mean() if 'rl_dist_m_std' in group else np.nan
+        baseline_time_std = group['baseline_time_s_std'].mean() if 'baseline_time_s_std' in group else np.nan
+        rl_time_std = group['rl_time_s_std'].mean() if 'rl_time_s_std' in group else np.nan
+
         grouped_data.append({
             'n_agents': agent_count,
             'baseline_sep': baseline_sep,
@@ -594,6 +612,14 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
             'baseline_collision': baseline_collision,
             'rl_collision': rl_collision,
             'collision_efficiency': collision_efficiency,
+            'baseline_sep_std': baseline_sep_std,
+            'rl_sep_std': rl_sep_std,
+            'baseline_risk_std': baseline_risk_std,
+            'rl_risk_std': rl_risk_std,
+            'baseline_dist_std': baseline_dist_std,
+            'rl_dist_std': rl_dist_std,
+            'baseline_time_std': baseline_time_std,
+            'rl_time_std': rl_time_std,
         })
     
     grouped_df = pd.DataFrame(grouped_data)
@@ -610,99 +636,125 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     rl_time_arr = np.array(grouped_df['rl_time'].values, dtype=float)
     baseline_collision_arr = np.array(grouped_df['baseline_collision'].values, dtype=float) * 100
     rl_collision_arr = np.array(grouped_df['rl_collision'].values, dtype=float) * 100
+    # std arrays
+    baseline_sep_std_arr = np.array(grouped_df['baseline_sep_std'].values, dtype=float)
+    rl_sep_std_arr = np.array(grouped_df['rl_sep_std'].values, dtype=float)
+    baseline_risk_std_arr = np.array(grouped_df['baseline_risk_std'].values, dtype=float)
+    rl_risk_std_arr = np.array(grouped_df['rl_risk_std'].values, dtype=float)
+    baseline_dist_std_arr = np.array(grouped_df['baseline_dist_std'].values, dtype=float)
+    rl_dist_std_arr = np.array(grouped_df['rl_dist_std'].values, dtype=float)
+    baseline_time_std_arr = np.array(grouped_df['baseline_time_std'].values, dtype=float)
+    rl_time_std_arr = np.array(grouped_df['rl_time_std'].values, dtype=float)
     
-    fig, axs = plt.subplots(2, 2, figsize=(7, 5.5))
+    # Create figure with space for legend above subplots
+    fig = plt.figure(figsize=(10, 8))
+    
+    # Add subplots starting lower, leaving space at top for legend and title
+    ax1 = plt.subplot(2, 2, 1, position=[0.08, 0.48, 0.38, 0.38])
+    ax2 = plt.subplot(2, 2, 2, position=[0.54, 0.48, 0.38, 0.38])
+    ax3 = plt.subplot(2, 2, 3, position=[0.08, 0.08, 0.38, 0.32])
+    ax4 = plt.subplot(2, 2, 4, position=[0.54, 0.08, 0.38, 0.32])
+    axs = np.array([[ax1, ax2], [ax3, ax4]])
     
     # ===== Panel 1 (Top Left): Total Path Length =====
     ax = axs[0, 0]
-    ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, 
-           label='Baseline', color='black')
-    ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, 
-           label='RL Policy', color='purple')
+    base_line, = ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    rl_line, = ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    if np.isfinite(baseline_dist_std_arr).any():
+        ax.fill_between(x, baseline_dist_arr - baseline_dist_std_arr, baseline_dist_arr + baseline_dist_std_arr, color='black', alpha=0.18)
+    if np.isfinite(rl_dist_std_arr).any():
+        ax.fill_between(x, rl_dist_arr - rl_dist_std_arr, rl_dist_arr + rl_dist_std_arr, color='purple', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, rl_dist_arr[i] - 80, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_dist_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
     ax.set_xlabel('Total Ships in Environment', fontsize=8)
     ax.set_ylabel('Total Path Length (m)', fontsize=8)
     ax.set_title('Total Path Length', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
     ax.tick_params(axis='y', labelsize=7)
-    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 2 (Top Right): Total Time Travelled =====
     ax = axs[0, 1]
-    ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, 
-           label='Baseline', color='black')
-    ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, 
-           label='RL Policy', color='purple')
+    base_line, = ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    rl_line, = ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    if np.isfinite(baseline_time_std_arr).any():
+        ax.fill_between(x, baseline_time_arr - baseline_time_std_arr, baseline_time_arr + baseline_time_std_arr, color='black', alpha=0.18)
+    if np.isfinite(rl_time_std_arr).any():
+        ax.fill_between(x, rl_time_arr - rl_time_std_arr, rl_time_arr + rl_time_std_arr, color='purple', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, rl_time_arr[i] + 10, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_time_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
     ax.set_xlabel('Total Ships in Environment', fontsize=8)
     ax.set_ylabel('Total Time Travelled (s)', fontsize=8)
     ax.set_title('Total Time Travelled', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
     ax.tick_params(axis='y', labelsize=7)
-    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
     ax = axs[1, 0]
-    ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, 
-           label='Baseline', color='black')
-    ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, 
-           label='RL Policy', color='purple')
+    base_line, = ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    rl_line, = ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    if np.isfinite(baseline_sep_std_arr).any():
+        ax.fill_between(x, baseline_sep_arr - baseline_sep_std_arr, baseline_sep_arr + baseline_sep_std_arr, color='black', alpha=0.18)
+    if np.isfinite(rl_sep_std_arr).any():
+        ax.fill_between(x, rl_sep_arr - rl_sep_std_arr, rl_sep_arr + rl_sep_std_arr, color='purple', alpha=0.18)
     desired_sep = 90.0
-    ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=1.5, 
-              label=f'Desired Min Sep (3×LOA = {desired_sep:.0f}m)', alpha=0.7)
+    sep_line = ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=1.5, label=f'Desired Min Sep (3×LOA = {desired_sep:.0f}m)', alpha=0.7)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, rl_sep_arr[i] - 50, 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_sep_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
     ax.set_xlabel('Total Ships in Environment', fontsize=8)
     ax.set_ylabel('Minimum Separation Distance (m)', fontsize=8)
     ax.set_title('Min Separation Distance', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
     ax.tick_params(axis='y', labelsize=7)
-    ax.legend(fontsize=7, loc='best')
+    ax.legend(handles=[sep_line], fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 4 (Bottom Right): Risk Exposure =====
     ax = axs[1, 1]
-    ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, 
-           label='Baseline', color='black')
-    ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, 
-           label='RL Policy', color='purple')
+    base_line, = ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    rl_line, = ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    if np.isfinite(baseline_risk_std_arr).any():
+        ax.fill_between(x, baseline_risk_arr - baseline_risk_std_arr, baseline_risk_arr + baseline_risk_std_arr, color='black', alpha=0.18)
+    if np.isfinite(rl_risk_std_arr).any():
+        ax.fill_between(x, rl_risk_arr - rl_risk_std_arr, rl_risk_arr + rl_risk_std_arr, color='purple', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.text(xi, rl_risk_arr[i] + 0.03 * baseline_risk_arr.max(), 
-               f'{symbol}{eff:.1f}%', ha='center', fontsize=7, fontweight='bold',
-               color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_risk_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
     ax.set_xlabel('Total Ships in Environment', fontsize=8)
     ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=8)
     ax.set_title('Risk Exposure', fontsize=11, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
     ax.tick_params(axis='y', labelsize=7)
-    ax.legend(fontsize=7, loc='best')
     ax.grid(True, alpha=0.3)
     
-    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', 
-                fontsize=12, fontweight='bold')
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    # Add title at the top
+    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', fontsize=16, fontweight='bold', y=0.98)
+    
+    # Add legend below title, above subplots
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    
+    legend_elements = [
+        Line2D([0], [0], color='black', marker='o', linestyle='-', linewidth=2, markersize=6, label='Baseline Ownship'),
+        Patch(facecolor='black', alpha=0.18, label='Baseline ±1 std'),
+        Line2D([0], [0], color='purple', marker='s', linestyle='-', linewidth=2, markersize=6, label='RL Ownship'),
+        Patch(facecolor='purple', alpha=0.18, label='RL ±1 std'),
+    ]
+    
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=4, fontsize=11, frameon=True, facecolor='white', edgecolor='black')
+    
     fig.savefig(output_path, dpi=300, format='png')
     plt.close(fig)
     print(f"  Saved: {output_path.name}")

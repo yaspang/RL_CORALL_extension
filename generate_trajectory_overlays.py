@@ -116,11 +116,11 @@ def main():
                         help="Case numbers to generate overlays for")
     parser.add_argument("--output_dir", type=Path, default=Path("Visualizations/trajectory_overlays"),
                         help="Output directory for plots")
-    parser.add_argument("--base_dir", type=Path, default=None,
+    parser.add_argument("--base_dir", type=Path, default=Path('.'),
                         help="Base directory containing eval/baseline dirs (default: project root)")
     args = parser.parse_args()
 
-    search_dir = args.base_dir if args.base_dir else BASE_DIR
+    search_dir = args.base_dir if args.base_dir else Path('.')  # Use current directory as default
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     stacked_data = []  # collect (bl_hist, rl_hist, case_num) for stacked figure

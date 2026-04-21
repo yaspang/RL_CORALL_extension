@@ -83,38 +83,61 @@ def extract_metrics_from_summary(summary: Dict) -> Dict[str, float]:
     # Basic stats
     metrics["total_episodes"] = summary.get("episodes", 0)
     
-    # Extract from aggregate_metrics if available
+    # Use aggregate_metrics when present, otherwise use top-level keys.
     agg = summary.get("aggregate_metrics", {})
+
+    def metric(key: str, default=np.nan):
+        val = agg.get(key, summary.get(key, default))
+        if val is None or np.isinf(val):
+            return default
+        return val
     
     # Return stats
-    metrics["mean_return"] = agg.get("episode_return_mean", 0) or 0
-    metrics["std_return"] = agg.get("episode_return_std", 0) or 0
+    metrics["mean_return"] = metric("episode_return_mean", 0) or 0
+    metrics["std_return"] = metric("episode_return_std", 0) or 0
     
     # Safety rates (0-1)
-    collision_rate = agg.get("collision_any_mean", 0)
+    collision_rate = metric("collision_any_mean", np.nan)
+    if np.isnan(collision_rate):
+        collision_rate = metric("collision_rate", 0)
     metrics["collision_rate"] = collision_rate if collision_rate is not None and not np.isinf(collision_rate) else 0
+    metrics["std_collision_rate"] = metric("collision_any_std", np.nan)
     metrics["collision_count"] = int(metrics["total_episodes"] * metrics["collision_rate"]) if metrics["collision_rate"] else 0
     
-    near_miss_rate = agg.get("near_miss_any_mean", 0)
+    near_miss_rate = metric("near_miss_any_mean", np.nan)
+    if np.isnan(near_miss_rate):
+        near_miss_rate = metric("near_miss_rate", 0)
     metrics["near_miss_rate"] = near_miss_rate if near_miss_rate is not None and not np.isinf(near_miss_rate) else 0
+    metrics["std_near_miss_rate"] = metric("near_miss_any_std", np.nan)
     metrics["near_miss_count"] = int(metrics["total_episodes"] * metrics["near_miss_rate"]) if metrics["near_miss_rate"] else 0
     
     # Distance/CPA stats (handle Infinity values)
-    dcpa_val = agg.get("min_dcpa_m_ownship_mean", np.nan)
+    dcpa_val = metric("min_dcpa_m_ownship_mean", np.nan)
+    if np.isnan(dcpa_val):
+        dcpa_val = metric("min_dcpa_m_mean", np.nan)
     metrics["min_dcpa_m"] = dcpa_val if dcpa_val is not None and not np.isinf(dcpa_val) else np.nan
     metrics["mean_dcpa_m"] = dcpa_val if dcpa_val is not None and not np.isinf(dcpa_val) else np.nan
+    metrics["std_dcpa_m"] = metric("min_dcpa_m_ownship_std", np.nan)
     
-    sep_val = agg.get("min_actual_sep_m_ownship_mean", np.nan)
+    sep_val = metric("min_actual_sep_m_ownship_mean", np.nan)
+    if np.isnan(sep_val):
+        sep_val = metric("min_actual_sep_m_mean", np.nan)
     metrics["min_actual_sep_m"] = sep_val if sep_val is not None else np.nan
     metrics["mean_actual_sep_m"] = sep_val if sep_val is not None else np.nan
+    metrics["std_actual_sep_m"] = metric("min_actual_sep_m_ownship_std", np.nan)
     
     # Time-to-collision stats
-    tcpa_val = agg.get("min_tcpa_s_ownship_mean", np.nan)
+    tcpa_val = metric("min_tcpa_s_ownship_mean", np.nan)
+    if np.isnan(tcpa_val):
+        tcpa_val = metric("min_tcpa_s_mean", np.nan)
     metrics["min_tcpa_s"] = tcpa_val if tcpa_val is not None else np.nan
     metrics["mean_tcpa_s"] = tcpa_val if tcpa_val is not None else np.nan
+    metrics["std_tcpa_s"] = metric("min_tcpa_s_ownship_std", np.nan)
     
     # Success rate
-    metrics["success_rate"] = agg.get("success_ownship_mean", 0) or 0
+    metrics["success_rate"] = metric("success_ownship_mean", np.nan)
+    if np.isnan(metrics["success_rate"]):
+        metrics["success_rate"] = metric("success_rate_ownship_mean", 0) or 0
     
     return metrics
 
@@ -221,7 +244,17 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     
     # 1. Return by case
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.bar(df.index, df["mean_return"], color="steelblue", alpha=0.7, edgecolor="black")
+    return_yerr = df["std_return"] if "std_return" in df.columns else None
+    ax.bar(
+        df.index,
+        df["mean_return"],
+        yerr=return_yerr,
+        capsize=4,
+        color="steelblue",
+        alpha=0.7,
+        edgecolor="black",
+        error_kw={"elinewidth": 1.0, "alpha": 0.8},
+    )
     ax.set_xlabel("Case Number")
     ax.set_ylabel("Mean Return")
     ax.set_title("Mean Return by Case")
@@ -249,8 +282,32 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     
     # 3. Distance metrics
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df.index, df["mean_dcpa_m"], marker="o", label="Mean DCPA", linewidth=2, markersize=8)
-    ax.plot(df.index, df["mean_actual_sep_m"], marker="s", label="Mean Actual Sep", linewidth=2, markersize=8)
+    mean_dcpa = df["mean_dcpa_m"].to_numpy(dtype=float)
+    std_dcpa = df["std_dcpa_m"].to_numpy(dtype=float) if "std_dcpa_m" in df.columns else np.full(len(df), np.nan)
+    mean_sep = df["mean_actual_sep_m"].to_numpy(dtype=float)
+    std_sep = df["std_actual_sep_m"].to_numpy(dtype=float) if "std_actual_sep_m" in df.columns else np.full(len(df), np.nan)
+
+    dcpa_line = ax.plot(df.index, mean_dcpa, marker="o", label="Mean DCPA", linewidth=2, markersize=8)[0]
+    sep_line = ax.plot(df.index, mean_sep, marker="s", label="Mean Actual Sep", linewidth=2, markersize=8)[0]
+
+    if np.isfinite(std_dcpa).any():
+        ax.fill_between(
+            df.index,
+            mean_dcpa - std_dcpa,
+            mean_dcpa + std_dcpa,
+            color=dcpa_line.get_color(),
+            alpha=0.18,
+            label="DCPA ±1 std",
+        )
+    if np.isfinite(std_sep).any():
+        ax.fill_between(
+            df.index,
+            mean_sep - std_sep,
+            mean_sep + std_sep,
+            color=sep_line.get_color(),
+            alpha=0.18,
+            label="Actual Sep ±1 std",
+        )
     ax.axhline(y=60, color="red", linestyle="--", label="Collision Threshold (60m)", alpha=0.7)
     ax.set_xlabel("Case Number")
     ax.set_ylabel("Distance (m)")
@@ -263,8 +320,19 @@ def plot_case_metrics(df: pd.DataFrame, output_dir: str | Path):
     
     # 4. Time-to-collision
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(df.index, df["mean_tcpa_s"], marker="o", label="Mean TCPA", linewidth=2, markersize=8)
-    ax.fill_between(range(len(df)), 0, df["mean_tcpa_s"], alpha=0.3)
+    mean_tcpa = df["mean_tcpa_s"].to_numpy(dtype=float)
+    std_tcpa = df["std_tcpa_s"].to_numpy(dtype=float) if "std_tcpa_s" in df.columns else np.full(len(df), np.nan)
+
+    tcpa_line = ax.plot(df.index, mean_tcpa, marker="o", label="Mean TCPA", linewidth=2, markersize=8)[0]
+    if np.isfinite(std_tcpa).any():
+        ax.fill_between(
+            df.index,
+            mean_tcpa - std_tcpa,
+            mean_tcpa + std_tcpa,
+            color=tcpa_line.get_color(),
+            alpha=0.2,
+            label="TCPA ±1 std",
+        )
     ax.set_xlabel("Case Number")
     ax.set_ylabel("Time to Collision (s)")
     ax.set_title("Mean Time-to-Collision by Case")
