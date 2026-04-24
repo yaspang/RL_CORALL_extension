@@ -72,7 +72,7 @@ class RandomCaseEnv(gym.Wrapper):
         cases_to_train: List[int] = [1, 6, 21],
         num_seeds: int = 100,
         dt: float = 0.5,
-        sim_time: float = 490.0,
+        sim_time: float = 500.0,
         n_heading: int = 7,
         max_heading_change_deg: float = 25.0,
         loa_m: float = 30.0,

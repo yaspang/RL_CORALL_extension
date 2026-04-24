@@ -37,6 +37,7 @@ Then compare performance across all three cases.
 
 import argparse
 from pathlib import Path
+from typing import Optional, Dict, List, Tuple
 from datetime import datetime
 import json
 import numpy as np
@@ -51,7 +52,12 @@ from maritime_rl_pkg.episode_tracker import EpisodeReturnTracker
 
 
 class GeneralizedTrainingMetricsCallback(BaseCallback):
-    """Track training metrics using EpisodeReturnTracker wrapper."""
+    """Track training metrics using EpisodeReturnTracker wrapper.
+    
+    Tracks RAW returns for training, but computes NORMALIZED returns for visualization.
+    This gives the policy real reward signals (collisions are bad!) while providing
+    clean convergence plots that show balanced improvement across scenario types.
+    """
     
     def __init__(self, episode_tracker=None, verbose=1, output_dir=None):
         super().__init__(verbose)
@@ -59,17 +65,53 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         self.verbose = verbose
         self.output_dir = output_dir
         self.timesteps = []
-        self.train_returns = []
+        self.train_returns = []  # RAW returns for logging
+        self.train_returns_normalized = []  # NORMALIZED returns for plotting
         self.val_returns = []
-        self.returns_2ship = []
-        self.returns_3ship = []
-        self.returns_4ship = []
+        self.returns_2ship = []  # RAW
+        self.returns_3ship = []  # RAW
+        self.returns_4ship = []  # RAW
+        self.returns_2ship_normalized = []  # NORMALIZED
+        self.returns_3ship_normalized = []  # NORMALIZED
+        self.returns_4ship_normalized = []  # NORMALIZED
         self.episode_counter = 0
         self.logger_keys_printed = False
         self.valid_key = None
         self.diagnostics_file = None
         if output_dir:
             self.diagnostics_file = output_dir / "logger_diagnostics.txt"
+        
+        # Running statistics for normalization (separate per ship count)
+        self.ship_count_stats = {
+            2: {"returns": [], "mean": 0.0, "std": 1.0},
+            3: {"returns": [], "mean": 0.0, "std": 1.0},
+            4: {"returns": [], "mean": 0.0, "std": 1.0},
+        }
+    
+    def _normalize_value(self, value: float, ship_count: int) -> float:
+        """Normalize a value using running statistics for the ship count."""
+        if not np.isfinite(value):
+            return np.nan
+        stats = self.ship_count_stats.get(ship_count, {})
+        mean = stats.get("mean", 0.0)
+        std = max(stats.get("std", 1.0), 1e-8)
+        normalized = (value - mean) / std
+        # Clip extreme outliers to prevent visualization artifacts
+        return np.clip(normalized, -10.0, 10.0)
+    
+    def _update_stats(self, returns_dict: dict):
+        """Update running statistics based on observed returns."""
+        # returns_dict: {2: mean_return_2ship, 3: mean_return_3ship, 4: mean_return_4ship}
+        for ship_count, ret in returns_dict.items():
+            if np.isfinite(ret):
+                self.ship_count_stats[ship_count]["returns"].append(ret)
+                # Recompute mean and std
+                all_ret = self.ship_count_stats[ship_count]["returns"]
+                self.ship_count_stats[ship_count]["mean"] = np.mean(all_ret)
+                if len(all_ret) > 1:
+                    std_val = float(np.std(all_ret))
+                    # Ensure std doesn't get too small (causes numerical issues)
+                    self.ship_count_stats[ship_count]["std"] = max(std_val, 1e-6)
     
     def _on_step(self) -> bool:
         """Called after each environment step."""
@@ -80,23 +122,37 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         
         # Log metrics periodically
         if self.num_timesteps % 1000 == 0 and self.num_timesteps > 0:
-            # Training return: windowed mean of recent episodes
+            # Training return: windowed mean of recent episodes (RAW)
             train_return = self._get_mean_episode_return()
             
-            # Validation return: mean of only recent episodes (last ~10% of what we've seen)
-            val_return = np.nan
-            
-            self.timesteps.append(self.num_timesteps)
-            self.train_returns.append(train_return)
-            self.val_returns.append(val_return)
-            
-            # Per-ship-count returns
+            # Per-ship-count returns (RAW)
             by_ships = {}
             if self.episode_tracker is not None:
                 by_ships = self.episode_tracker.get_mean_return_by_ships()
+            
+            # Update statistics for normalization
+            self._update_stats(by_ships)
+            
+            # Compute normalized versions for visualization
+            train_return_norm = self._normalize_value(train_return, 2) if not np.isnan(train_return) else np.nan
+            returns_by_ships_norm = {
+                ships: self._normalize_value(ret, ships) 
+                for ships, ret in by_ships.items() if np.isfinite(ret)
+            }
+            
+            # Store both raw and normalized
+            self.timesteps.append(self.num_timesteps)
+            self.train_returns.append(train_return)
+            self.train_returns_normalized.append(train_return_norm)
+            self.val_returns.append(np.nan)
+            
             self.returns_2ship.append(by_ships.get(2, np.nan))
             self.returns_3ship.append(by_ships.get(3, np.nan))
             self.returns_4ship.append(by_ships.get(4, np.nan))
+            
+            self.returns_2ship_normalized.append(returns_by_ships_norm.get(2, np.nan))
+            self.returns_3ship_normalized.append(returns_by_ships_norm.get(3, np.nan))
+            self.returns_4ship_normalized.append(returns_by_ships_norm.get(4, np.nan))
             
             if self.verbose:
                 parts = [f"[Step {self.num_timesteps:7d}] Return: {train_return:8.1f}"]
@@ -164,28 +220,41 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         if not self.logger_keys_printed:
             print("\n[Info] Logger keys were never printed - first checkpoint may not have been reached")
         
+        # Diagnostics for raw returns
         if self.train_returns:
-            valid_returns = [r for r in self.train_returns if r != 0.0]
-            if valid_returns:
-                print(f"\nTraining Episode Return Statistics (from {len(valid_returns)}/{len(self.train_returns)} checkpoints):")
-                print(f"  Final return:    {valid_returns[-1]:10.2f}")
-                print(f"  Best return:     {np.max(valid_returns):10.2f}")
-                print(f"  Mean return:     {np.mean(valid_returns):10.2f}")
-                print(f"  Std return:      {np.std(valid_returns):10.2f}")
-                
-                # Check for convergence/overfitting
-                if len(valid_returns) >= 3:
-                    recent_mean = np.mean(valid_returns[-3:])
-                    early_mean = np.mean(valid_returns[:3])
-                    improvement = recent_mean - early_mean
-                    print(f"\nConvergence Signal:")
-                    print(f"  Early mean (first 3):   {early_mean:10.2f}")
-                    print(f"  Recent mean (last 3):   {recent_mean:10.2f}")
-                    print(f"  Improvement:            {improvement:10.2f}")
+            valid_raw = [r for r in self.train_returns if np.isfinite(r) and r != 0.0]
+            if valid_raw:
+                print(f"\nRaw Training Episode Return Statistics (from {len(valid_raw)}/{len(self.train_returns)} checkpoints):")
+                print(f"  Final return:    {valid_raw[-1]:10.2f}")
+                print(f"  Best return:     {np.max(valid_raw):10.2f}")
+                print(f"  Mean return:     {np.mean(valid_raw):10.2f}")
+                print(f"  Std return:      {np.std(valid_raw):10.2f}")
+                print(f"  Range:           [{np.min(valid_raw):10.2f}, {np.max(valid_raw):10.2f}]")
             else:
-                print(f"\n⚠️  All {len(self.train_returns)} checkpoint returns are 0.0!")
+                print(f"\n⚠️  All {len(self.train_returns)} raw returns are 0.0 or NaN!")
         else:
-            print("\n⚠️  No metrics were logged during training!")
+            print("\n⚠️  No raw metrics were logged during training!")
+        
+        # Diagnostics for normalized returns
+        if self.train_returns_normalized:
+            valid_norm = [r for r in self.train_returns_normalized if np.isfinite(r)]
+            if valid_norm:
+                print(f"\nNormalized Training Episode Return Statistics ({len(valid_norm)}/{len(self.train_returns_normalized)} valid):")
+                print(f"  Final normalized: {valid_norm[-1]:10.4f}")
+                print(f"  Mean normalized:  {np.mean(valid_norm):10.4f}")
+                print(f"  Std normalized:   {np.std(valid_norm):10.4f}")
+                print(f"  Range:            [{np.min(valid_norm):10.4f}, {np.max(valid_norm):10.4f}]")
+            else:
+                print(f"\n⚠️  All {len(self.train_returns_normalized)} normalized returns are NaN!")
+        
+        # Show normalization statistics
+        print("\nNormalization Statistics (per scenario type):")
+        for n_ships in [2, 3, 4]:
+            stats = self.ship_count_stats.get(n_ships, {})
+            n_samples = len(stats.get("returns", []))
+            mean = stats.get("mean", 0.0)
+            std = stats.get("std", 1.0)
+            print(f"  {n_ships}-ship: {n_samples:4d} samples, mean={mean:10.2f}, std={std:10.4f}")
         
         print("=" * 80 + "\n")
 
@@ -198,53 +267,102 @@ def create_output_dir(timestamp: str) -> Path:
     return output_dir
 
 
-def plot_training_convergence(timesteps: list, train_returns: list, val_returns: list, output_path: Path,
-                              returns_2ship: list = None, returns_3ship: list = None, returns_4ship: list = None):
-    """Plot training convergence curve with train and per-ship-count breakdowns."""
-    if not timesteps or not train_returns:
+def plot_training_convergence(timesteps: list, train_returns_normalized: list, val_returns: list, output_path: Path,
+                              returns_2ship_normalized: Optional[list] = None, returns_3ship_normalized: Optional[list] = None, 
+                              returns_4ship_normalized: Optional[list] = None, train_returns_raw: Optional[list] = None,
+                              use_raw_for_plot: bool = False, show_overall: bool = True):
+    """
+    Plot training convergence curve with normalized returns.
+    
+    Uses NORMALIZED returns for cleaner visualization (centered per scenario type).
+    Shows all three scenario types on same plot to demonstrate balanced learning.
+    
+    Parameters:
+        train_returns_normalized: Normalized overall returns for plotting
+        returns_*ship_normalized: Normalized returns per scenario type
+        train_returns_raw: Raw returns for subtitle reference
+    """
+    if not timesteps or not train_returns_normalized:
         print("  [Skipped convergence plot - no training data collected]")
         return
     
-    print(f"  Plotting {len(timesteps)} checkpoints...")
+    print(f"  Plotting {len(timesteps)} checkpoints (normalized)...")
+    
+    # Filter to only finite values for plotting
+    timesteps_arr = np.array(timesteps, dtype=float)
+    train_norm_arr = np.array(train_returns_normalized, dtype=float)
+    
+    # Create mask for finite values
+    mask = np.isfinite(train_norm_arr)
+    if not np.any(mask):
+        print("  [Skipped convergence plot - no valid training data (all NaN/inf)]")
+        return
+    
+    # Filter arrays
+    timesteps_valid = timesteps_arr[mask]
+    train_norm_valid = train_norm_arr[mask]
+    
+    # If we have raw data, compute its statistics for subtitle
+    raw_info = ""
+    if train_returns_raw:
+        raw_arr = np.array(train_returns_raw, dtype=float)
+        raw_valid = raw_arr[np.isfinite(raw_arr)]
+        if len(raw_valid) > 0:
+            raw_info = f" (Raw: mean={np.mean(raw_valid):.1f}, range=[{np.min(raw_valid):.1f}, {np.max(raw_valid):.1f}])"
     
     fig, ax = plt.subplots(figsize=(14, 7))
     
-    timesteps_m = np.array(timesteps) / 1e6
+    timesteps_m = timesteps_valid / 1e6
     
-    # Plot overall training returns
-    ax.plot(timesteps_m, train_returns, linewidth=2.5, marker='o', 
-            markersize=5, color='steelblue', label='Overall (last 50 ep)', zorder=3)
+    # Plot overall training returns (if requested - only for raw plot)
+    if show_overall:
+        ax.plot(timesteps_m, train_norm_valid, linewidth=2.5, marker='o', 
+                markersize=5, color='steelblue', label='Overall (last 50 ep)', zorder=3)
     
-    # Plot per-ship-count returns
+    # Plot per-ship-count returns (normalized)
     ship_colors = {2: '#2ca02c', 3: '#ff7f0e', 4: '#d62728'}
     ship_labels = {2: '2-ship cases', 3: '3-ship cases', 4: '4-ship cases'}
-    for n_ships, data in [(2, returns_2ship), (3, returns_3ship), (4, returns_4ship)]:
+    for n_ships, data in [(2, returns_2ship_normalized), (3, returns_3ship_normalized), (4, returns_4ship_normalized)]:
         if data and len(data) == len(timesteps):
             arr = np.array(data, dtype=float)
-            mask = np.isfinite(arr)
-            if np.any(mask):
-                ax.plot(timesteps_m[mask], arr[mask], linewidth=1.5, alpha=0.7,
+            # Use same mask for consistency
+            arr_valid = arr[mask]
+            valid_mask = np.isfinite(arr_valid)
+            if np.any(valid_mask):
+                ax.plot(timesteps_m[valid_mask], arr_valid[valid_mask], linewidth=1.5, alpha=0.7,
                         color=ship_colors[n_ships], label=ship_labels[n_ships], zorder=2)
     
-    # Add trend line
-    if len(train_returns) > 3:
-        window = max(1, len(train_returns) // 5)
-        train_trend = np.convolve(train_returns, np.ones(window)/window, mode='valid')
-        trend_timesteps = timesteps_m[window-1:]
-        ax.plot(trend_timesteps, train_trend, linewidth=2.5, linestyle='--', 
-                color='navy', alpha=0.6, label='Overall Trend', zorder=2)
+    # Add trend line with very aggressive exponential smoothing (only for overall)
+    if show_overall and len(train_norm_valid) > 3:
+        # Use very low alpha for heavy smoothing (alpha=0.05 = 5% recent, 95% history)
+        alpha = 0.05  # Very conservative - heavy smoothing
+        ema = np.zeros_like(train_norm_valid)
+        ema[0] = train_norm_valid[0]
+        for i in range(1, len(train_norm_valid)):
+            ema[i] = alpha * train_norm_valid[i] + (1 - alpha) * ema[i-1]
+        ax.plot(timesteps_m, ema, linewidth=3.5, linestyle='--', 
+                color='navy', alpha=0.8, label='Trend (EMA)', zorder=2.5)
+    
+    # Reference lines
+    ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1, label='Baseline (μ)')
     
     ax.set_xlabel('Training Steps (Millions)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Episode Return', fontsize=12, fontweight='bold')
-    ax.set_title('Generalized Policy Training Return', 
-                 fontsize=14, fontweight='bold')
+    plot_type = "Raw" if use_raw_for_plot else "Normalized"
+    ax.set_title(f'Generalized Policy Training Return ({plot_type} by Scenario Type)' + raw_info, 
+                 fontsize=13, fontweight='bold')
     ax.grid(True, alpha=0.3, zorder=1)
     ax.legend(fontsize=11, loc='best')
+    
+    # Auto-scale with some padding
+    y_min, y_max = np.min(train_norm_valid), np.max(train_norm_valid)
+    y_pad = max(0.5, (y_max - y_min) * 0.1)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
     plt.close(fig)
-    print(f"  ✓ Convergence plot saved to: {output_path.name}")
+    print(f"  ✓ Convergence plot saved to: {output_path.name} ({len(train_norm_valid)} valid points)")
 
 
 def main():
@@ -398,14 +516,42 @@ def main():
         model.save(str(final_path))
         print(f"\n✓ Final model saved to: {final_path}")
         
-        # Plot training convergence
+        # Plot training convergence (using normalized returns for cleaner visualization)
         print(f"\nGenerating convergence plots...")
-        plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns, 
-                                 metrics_callback.val_returns,
-                                 output_dir / "training_convergence.png",
-                                 returns_2ship=metrics_callback.returns_2ship,
-                                 returns_3ship=metrics_callback.returns_3ship,
-                                 returns_4ship=metrics_callback.returns_4ship)
+        
+        # Plot training convergence (using normalized returns for cleaner visualization)
+        print(f"\nGenerating convergence plots...")
+        
+        # Try raw plot first (more stable than normalized early on)
+        raw_valid = [x for x in metrics_callback.train_returns if np.isfinite(x)]
+        norm_valid = [x for x in metrics_callback.train_returns_normalized if np.isfinite(x)]
+        
+        if len(raw_valid) > 0:
+            # Plot raw returns (with overall line and trend)
+            plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns, 
+                                     metrics_callback.val_returns,
+                                     output_dir / "training_convergence_raw.png",
+                                     returns_2ship_normalized=metrics_callback.returns_2ship,
+                                     returns_3ship_normalized=metrics_callback.returns_3ship,
+                                     returns_4ship_normalized=metrics_callback.returns_4ship,
+                                     train_returns_raw=metrics_callback.train_returns,
+                                     use_raw_for_plot=True,
+                                     show_overall=True)
+        
+        if len(norm_valid) > 0:
+            # Plot normalized returns per scenario type (NO overall line, only per-scenario)
+            plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns_normalized, 
+                                     metrics_callback.val_returns,
+                                     output_dir / "training_convergence_normalized.png",
+                                     returns_2ship_normalized=metrics_callback.returns_2ship_normalized,
+                                     returns_3ship_normalized=metrics_callback.returns_3ship_normalized,
+                                     returns_4ship_normalized=metrics_callback.returns_4ship_normalized,
+                                     train_returns_raw=metrics_callback.train_returns,
+                                     use_raw_for_plot=False,
+                                     show_overall=False)
+        
+        if len(raw_valid) == 0 and len(norm_valid) == 0:
+            print("  ⚠️  No valid training data to plot!")
         
         # Save training config
         config = {

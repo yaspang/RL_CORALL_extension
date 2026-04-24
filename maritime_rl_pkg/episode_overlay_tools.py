@@ -285,8 +285,8 @@ def plot_ownship_threat_profile(
 
     # DCPA (top-left) — in meters
     axs[0, 0].plot(tb[maskb], dcpa_b_m[maskb], "--", linewidth=2.5, color="black", label="Baseline")
-    axs[0, 0].plot(tr[maskr], dcpa_r_m[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[0, 0].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2, label="RL episode ends")
+    axs[0, 0].plot(tr[maskr], dcpa_r_m[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
+    axs[0, 0].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2, label="RL episode ends")
     axs[0, 0].set_ylabel("DCPA (m)")
     axs[0, 0].set_title("Distance to Closest Point of Approach")
     axs[0, 0].grid(True, alpha=0.3)
@@ -296,8 +296,8 @@ def plot_ownship_threat_profile(
 
     # Range (top-right) — in meters
     axs[0, 1].plot(tb[maskb], range_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
-    axs[0, 1].plot(tr[maskr], range_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[0, 1].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
+    axs[0, 1].plot(tr[maskr], range_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
+    axs[0, 1].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
     axs[0, 1].set_ylabel("Range (m)")
     axs[0, 1].set_title("Range (Distance)")
     axs[0, 1].grid(True, alpha=0.3)
@@ -307,8 +307,8 @@ def plot_ownship_threat_profile(
 
     # TCPA (bottom-left) — negative values clipped to 0
     axs[1, 0].plot(tb[maskb], tcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
-    axs[1, 0].plot(tr[maskr], tcpa_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[1, 0].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
+    axs[1, 0].plot(tr[maskr], tcpa_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
+    axs[1, 0].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
     axs[1, 0].set_ylabel("TCPA (s)")
     axs[1, 0].set_title("Time to CPA (0 = already passed)")
     axs[1, 0].set_xlabel("Time (s)")
@@ -319,8 +319,8 @@ def plot_ownship_threat_profile(
 
     # Risk (bottom-right)
     axs[1, 1].plot(tb[maskb], risk_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
-    axs[1, 1].plot(tr[maskr], risk_r_agg[maskr], "-", linewidth=2.5, color="purple", label="RL Policy")
-    axs[1, 1].axvline(x=rl_end_time, color="purple", linestyle=":", alpha=0.5, linewidth=1.2)
+    axs[1, 1].plot(tr[maskr], risk_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
+    axs[1, 1].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
     axs[1, 1].set_ylabel("Risk")
     axs[1, 1].set_title("Collision Risk (Max Across All Targets)")
     axs[1, 1].set_xlabel("Time (s)")
@@ -388,7 +388,7 @@ def plot_full_trajectory_overlay(
 
     ax.plot(xb0, yb0, "--", color="black", linewidth=1.8,
             label="CORALL baseline", zorder=3)
-    ax.plot(xr0, yr0, "-", color="purple", linewidth=1.8,
+    ax.plot(xr0, yr0, "-", color="#ff7f0e", linewidth=1.8,
             label="RL policy", zorder=3)
 
     # Start marker
@@ -439,7 +439,7 @@ def plot_full_trajectory_overlay(
             animate_ship(
                 float(Xr[ir, 0, 0]), float(Xr[ir, 0, 1]), float(Xr[ir, 0, 2]),
                 LOA * ship_scale, BEAM * ship_scale,
-                cpa=0.0, color="purple", ax=ax,
+                cpa=0.0, color="#ff7f0e", ax=ax,
             )
 
         # Time labels: baseline in gray, RL in light purple
@@ -561,7 +561,7 @@ def plot_stacked_trajectory_overlay(
         lbl_bl = "CORALL baseline" if row == 0 else None
         lbl_rl = "RL policy" if row == 0 else None
         ax.plot(xb0, yb0, "--", color="black", linewidth=1.5, label=lbl_bl, zorder=3)
-        ax.plot(xr0, yr0, "-", color="purple", linewidth=1.5, label=lbl_rl, zorder=3)
+        ax.plot(xr0, yr0, "-", color="#ff7f0e", linewidth=1.5, label=lbl_rl, zorder=3)
 
         # Start / goal markers
         lbl_start = "Ownship start" if row == 0 else None
@@ -596,7 +596,7 @@ def plot_stacked_trajectory_overlay(
             if rl_active:
                 animate_ship(
                     float(Xr[ir_idx, 0, 0]), float(Xr[ir_idx, 0, 1]), float(Xr[ir_idx, 0, 2]),
-                    LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="purple", ax=ax,
+                    LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="#ff7f0e", ax=ax,
                 )
 
         # Panel title
@@ -698,7 +698,7 @@ def plot_encounter_detail_clean(
     fig, ax = plt.subplots(figsize=(9, 8))
 
     ax.plot(xb0[i0_b:i1_b], yb0[i0_b:i1_b], "--", color="black", linewidth=2.5, label="Baseline ownship")
-    ax.plot(xr0[i0_r:i1_r], yr0[i0_r:i1_r], "-", color="purple", linewidth=2.5, label="RL ownship")
+    ax.plot(xr0[i0_r:i1_r], yr0[i0_r:i1_r], "-", color="#ff7f0e", linewidth=2.5, label="RL ownship")
 
     # Target trajectories - same color for cleaner visualization
     ax.plot(xbt[i0_b:i1_b], ybt[i0_b:i1_b], color="tab:blue", linewidth=2.0, linestyle=":",
@@ -723,7 +723,7 @@ def plot_encounter_detail_clean(
         (30.0 / NMI) * 1.5,
         (16.0 / NMI) * 1.5,
         cpa=0.0,
-        color="purple",
+        color="#ff7f0e",
         ax=ax,
     )
     
@@ -749,7 +749,7 @@ def plot_encounter_detail_clean(
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8, label='Baseline ownship at CPA'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=8, label='RL ownship at CPA'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#ff7f0e', markersize=8, label='RL ownship at CPA'),
         Line2D([0], [0], marker='o', color='w', markerfacecolor='tab:blue', markersize=8, label='Target ship at CPA'),
     ]
     ax.legend(handles=ax.get_lines()[:2] + legend_elements, loc="best")
@@ -1105,12 +1105,12 @@ def plot_episode_overlay(
     yto = Xt[:, own_idx, 1] / NMI
 
     ax.plot(xbo, ybo, linestyle="--", linewidth=2.6, color="black", label="CORALL baseline ownship", zorder=3)
-    ax.plot(xto, yto, linestyle="--", linewidth=2.8, color="purple", label="RL policy ownship", zorder=3)
+    ax.plot(xto, yto, linestyle="--", linewidth=2.8, color="#ff7f0e", label="RL policy ownship", zorder=3)
 
     # start and end markers
     ax.scatter(xbo[0], ybo[0], color="black", s=80, marker='o', zorder=4, label="Start")  # baseline start
     ax.scatter(xbo[-1], ybo[-1], color="black", s=80, marker='*', zorder=4, label="Baseline End")  # baseline end
-    ax.scatter(xto[-1], yto[-1], color="purple", s=80, marker='*', zorder=4, label="RL End")  # RL end
+    ax.scatter(xto[-1], yto[-1], color="#ff7f0e", s=80, marker='*', zorder=4, label="RL End")  # RL end
 
     # closest approach markers for ownship
     ib = closest_approach_index(np.asarray(baseline_history["pair_dist"], dtype=float), own_idx=own_idx)
@@ -1191,7 +1191,7 @@ def plot_risk_dcpa_timeseries(
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
     ax1.plot(tb, risk_b, linestyle="--", linewidth=2.2, color="black", label="Baseline max Risk", zorder=3)
-    ax1.plot(tt, risk_t, linestyle="-", linewidth=2.2, color="purple", label="RL max Risk", zorder=3)
+    ax1.plot(tt, risk_t, linestyle="-", linewidth=2.2, color="#ff7f0e", label="RL max Risk", zorder=3)
     ax1.set_xlabel("Time (s)")
     ax1.set_ylabel("Max pairwise risk")
     ax1.grid(True, alpha=0.25)
@@ -1318,7 +1318,7 @@ def plot_encounter_overlay(
     ybt = Xb[i0:i1, target_idx, 1] / NMI
 
     ax.plot(xbo, ybo, "--", color="black", linewidth=2.8, label="Baseline ownship", zorder=3)
-    ax.plot(xto, yto, "-", color="purple", linewidth=2.8, label="RL ownship", zorder=3)
+    ax.plot(xto, yto, "-", color="#ff7f0e", linewidth=2.8, label="RL ownship", zorder=3)
     ax.plot(xbt, ybt, "-", color="tab:blue", linewidth=2.2, alpha=0.85, label=f"Target ship {target_idx}", zorder=2)
 
     # closest-approach markers

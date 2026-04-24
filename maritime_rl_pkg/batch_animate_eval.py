@@ -152,7 +152,7 @@ def animate_single_episode(
         # OWNSHIP: dashed purple trail
         xo = X_all[i0:s + 1, own_idx, 0] / NMI
         yo = X_all[i0:s + 1, own_idx, 1] / NMI
-        line, = ax.plot(xo, yo, color="purple", linewidth=2.8, alpha=0.85, 
+        line, = ax.plot(xo, yo, color="#ff7f0e", linewidth=2.8, alpha=0.85, 
                        linestyle="--", label="RL ownship trail")
         artists.append(line)
         
@@ -166,7 +166,7 @@ def animate_single_episode(
             (30.0 / NMI) * ship_scale,
             (16.0 / NMI) * ship_scale,
             cpa=0.0,
-            color="purple",
+            color="#ff7f0e",
             ax=ax,
         )
         if ship_artists is not None:
@@ -205,7 +205,7 @@ def animate_single_episode(
             X_all[-1, own_idx, 1] / NMI,
             s=70,
             marker="o",
-            color="purple",
+            color="#ff7f0e",
             alpha=0.6,
             edgecolors="black",
             linewidth=1.0,

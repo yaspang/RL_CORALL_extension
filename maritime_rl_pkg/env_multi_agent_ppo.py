@@ -51,8 +51,8 @@ class ObsNorm:
     # Position bounds in meters (scenarios ~16km extent)
     pos_max_m: float = 15000.0
     
-    # Velocity bounds in m/s (surge + obstacle speeds up to 25 m/s)
-    vel_max: float = 20.0
+    # Velocity bounds in m/s (typical ship speeds up to ~15 m/s)
+    vel_max: float = 15.0
     
     # Turn rate bounds in rad/s (typical ship rates)
     r_max: float = 0.5

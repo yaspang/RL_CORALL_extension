@@ -351,7 +351,7 @@ def create_bar_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
     rl_sep_m = metrics_df['rl_min_sep_nmi'] * NMI
     
     ax.bar(x - width/2, baseline_sep_m, width, label='Baseline', color='black')
-    ax.bar(x + width/2, rl_sep_m, width, label='RL Policy', color='purple')
+    ax.bar(x + width/2, rl_sep_m, width, label='RL Policy', color='#ff7f0e')
     
     ax.set_xlabel('Case', fontsize=12, fontweight='bold')
     ax.set_ylabel('Minimum Separation Distance (m)', fontsize=12, fontweight='bold')
@@ -381,7 +381,7 @@ def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
     rl_dist = metrics_df['rl_dist_m']
     
     bars1 = ax.bar(x - width/2, baseline_dist, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_dist, width, label='RL Policy', color='purple')
+    bars2 = ax.bar(x + width/2, rl_dist, width, label='RL Policy', color='#ff7f0e')
     
     # Add efficiency labels on bars
     for i, (b_dist, r_dist) in enumerate(zip(baseline_dist, rl_dist)):
@@ -418,7 +418,7 @@ def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
     rl_time = metrics_df['rl_time_s']
     
     bars1 = ax.bar(x - width/2, baseline_time, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_time, width, label='RL Policy', color='purple')
+    bars2 = ax.bar(x + width/2, rl_time, width, label='RL Policy', color='#ff7f0e')
     
     # Add efficiency labels on bars
     for i, (b_time, r_time) in enumerate(zip(baseline_time, rl_time)):
@@ -455,7 +455,7 @@ def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
     rl_risk = metrics_df['rl_risk_exposure']
     
     bars1 = ax.bar(x - width/2, baseline_risk, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_risk, width, label='RL Policy', color='purple')
+    bars2 = ax.bar(x + width/2, rl_risk, width, label='RL Policy', color='#ff7f0e')
     
     # Add difference labels on bars
     for i, (b_risk, r_risk) in enumerate(zip(baseline_risk, rl_risk)):
@@ -493,7 +493,7 @@ def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path)
     rl_collision_pct = metrics_df['rl_collision_rate'] * 100
     
     bars1 = ax.bar(x - width/2, baseline_collision_pct, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_collision_pct, width, label='RL Policy', color='purple')
+    bars2 = ax.bar(x + width/2, rl_collision_pct, width, label='RL Policy', color='#ff7f0e')
     
     # Add collision counts on bars
     for i, (b_rate, r_rate) in enumerate(zip(baseline_collision_pct, rl_collision_pct)):
@@ -545,7 +545,7 @@ def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path)
     ax.bar(np.array(x_positions) - width/2, baseline_sep_by_agents, width, 
            label='Baseline (avg)', color='black')
     ax.bar(np.array(x_positions) + width/2, rl_sep_by_agents, width, 
-           label='RL Policy (avg)', color='purple')
+           label='RL Policy (avg)', color='#ff7f0e')
     
     ax.set_xlabel('Total Ships in Environment', fontsize=12, fontweight='bold')
     ax.set_ylabel('Minimum Separation Distance (m)', fontsize=12, fontweight='bold')
@@ -659,11 +659,11 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     # ===== Panel 1 (Top Left): Total Path Length =====
     ax = axs[0, 0]
     base_line, = ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, color='black')
-    rl_line, = ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    rl_line, = ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_dist_std_arr).any():
         ax.fill_between(x, baseline_dist_arr - baseline_dist_std_arr, baseline_dist_arr + baseline_dist_std_arr, color='black', alpha=0.18)
     if np.isfinite(rl_dist_std_arr).any():
-        ax.fill_between(x, rl_dist_arr - rl_dist_std_arr, rl_dist_arr + rl_dist_std_arr, color='purple', alpha=0.18)
+        ax.fill_between(x, rl_dist_arr - rl_dist_std_arr, rl_dist_arr + rl_dist_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
@@ -679,11 +679,11 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     # ===== Panel 2 (Top Right): Total Time Travelled =====
     ax = axs[0, 1]
     base_line, = ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, color='black')
-    rl_line, = ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    rl_line, = ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_time_std_arr).any():
         ax.fill_between(x, baseline_time_arr - baseline_time_std_arr, baseline_time_arr + baseline_time_std_arr, color='black', alpha=0.18)
     if np.isfinite(rl_time_std_arr).any():
-        ax.fill_between(x, rl_time_arr - rl_time_std_arr, rl_time_arr + rl_time_std_arr, color='purple', alpha=0.18)
+        ax.fill_between(x, rl_time_arr - rl_time_std_arr, rl_time_arr + rl_time_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
@@ -699,11 +699,11 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
     ax = axs[1, 0]
     base_line, = ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, color='black')
-    rl_line, = ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    rl_line, = ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_sep_std_arr).any():
         ax.fill_between(x, baseline_sep_arr - baseline_sep_std_arr, baseline_sep_arr + baseline_sep_std_arr, color='black', alpha=0.18)
     if np.isfinite(rl_sep_std_arr).any():
-        ax.fill_between(x, rl_sep_arr - rl_sep_std_arr, rl_sep_arr + rl_sep_std_arr, color='purple', alpha=0.18)
+        ax.fill_between(x, rl_sep_arr - rl_sep_std_arr, rl_sep_arr + rl_sep_std_arr, color='#ff7f0e', alpha=0.18)
     desired_sep = 90.0
     sep_line = ax.axhline(y=desired_sep, color='red', linestyle='--', linewidth=1.5, label=f'Desired Min Sep (3×LOA = {desired_sep:.0f}m)', alpha=0.7)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
@@ -722,11 +722,11 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     # ===== Panel 4 (Bottom Right): Risk Exposure =====
     ax = axs[1, 1]
     base_line, = ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, color='black')
-    rl_line, = ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, color='purple')
+    rl_line, = ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_risk_std_arr).any():
         ax.fill_between(x, baseline_risk_arr - baseline_risk_std_arr, baseline_risk_arr + baseline_risk_std_arr, color='black', alpha=0.18)
     if np.isfinite(rl_risk_std_arr).any():
-        ax.fill_between(x, rl_risk_arr - rl_risk_std_arr, rl_risk_arr + rl_risk_std_arr, color='purple', alpha=0.18)
+        ax.fill_between(x, rl_risk_arr - rl_risk_std_arr, rl_risk_arr + rl_risk_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
@@ -749,8 +749,8 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     legend_elements = [
         Line2D([0], [0], color='black', marker='o', linestyle='-', linewidth=2, markersize=6, label='Baseline Ownship'),
         Patch(facecolor='black', alpha=0.18, label='Baseline ±1 std'),
-        Line2D([0], [0], color='purple', marker='s', linestyle='-', linewidth=2, markersize=6, label='RL Ownship'),
-        Patch(facecolor='purple', alpha=0.18, label='RL ±1 std'),
+        Line2D([0], [0], color='#ff7f0e', marker='s', linestyle='-', linewidth=2, markersize=6, label='RL Ownship'),
+        Patch(facecolor='#ff7f0e', alpha=0.18, label='RL ±1 std'),
     ]
     
     fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=4, fontsize=11, frameon=True, facecolor='white', edgecolor='black')

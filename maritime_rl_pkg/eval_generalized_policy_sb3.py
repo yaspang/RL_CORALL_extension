@@ -243,7 +243,7 @@ def run_one_episode(model, env, seed, args, capture_history=False):
             ownship_dcpa = float(np.min(abs_dcpa))
         else:
             # Fallback if all values below 10m threshold
-            ownship_dcpa = multi_env.LOA * 4.0
+            ownship_dcpa = multi_env.LOA_own * 4.0
     else:
         ownship_dcpa = np.inf
     
