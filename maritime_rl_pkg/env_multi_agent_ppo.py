@@ -153,6 +153,10 @@ class MultiShipParallelEnv(ParallelEnv):
         
         # Override ownship speed if specified, otherwise will inherit from first obstacle in init_from_case()
         self.ownship_speed_mps_override = ownship_speed_mps
+        
+        # Difficulty-aware reward weights
+        # 2-ship: cases 1-4, 3-ship: cases 5-11, 4-ship: cases 12-22
+        self.reward_weights = self._compute_reward_weights(case_number, self.n_obstacles)
     
         self.agents = [f"ship_{i}" for i in range(self.n_agents)]
         self.possible_agents = self.agents[:]
@@ -445,6 +449,38 @@ class MultiShipParallelEnv(ParallelEnv):
                         self.pair_dist[a, b] = self.pair_dist[b, a] = np.inf
                         self.pair_risk[a, b] = self.pair_risk[b, a] = 0.0
 
+    def _compute_reward_weights(self, case_num: int, n_obstacles: int) -> dict:
+        """
+        Compute difficulty-aware reward weights.
+        Harder scenarios (4-ship) get stronger penalties/rewards for safety.
+        """
+        if n_obstacles == 1:  # 2-ship cases
+            return {
+                'progress': 200.0,        # Waypoint progress
+                'risk': -8.0,             # Risk penalty (continuous shaping)
+                'separation': 1.0,        # Safe separation bonus
+                'warning': -1.0,          # Warning zone penalty
+                'collision': -500.0,      # Collision penalty
+                'success': 250.0,         # Success bonus
+            }
+        elif n_obstacles == 2:  # 3-ship cases
+            return {
+                'progress': 200.0,
+                'risk': -12.0,            # Stronger risk penalty for 3-ship
+                'separation': 2.0,        # Increased separation bonus
+                'warning': -2.0,          # Stronger warning penalty
+                'collision': -600.0,      # Increased collision penalty
+                'success': 250.0,
+            }
+        else:  # 4-ship cases (n_obstacles >= 3)
+            return {
+                'progress': 200.0,
+                'risk': -20.0,            # Strong risk penalty for 4-ship (safety critical)
+                'separation': 3.0,        # Much stronger separation bonus
+                'warning': -3.0,          # Strong warning penalty
+                'collision': -750.0,      # Severe collision penalty for hardest cases
+                'success': 250.0,
+            }
 
     def reset_internal_state(self):
         """Reinitialize all internal state variables for a new episode"""
@@ -664,22 +700,42 @@ class MultiShipParallelEnv(ParallelEnv):
         # Decompose surge speed into x and y velocity components
         u_x = u * np.cos(psi)
         u_y = u * np.sin(psi)
+        
+        # NORMALIZATION: Clip all raw values to [-1, 1] scale using normalization bounds
+        x_norm = np.clip(x_m / self.norm.pos_max_m, -1.0, 1.0)
+        y_norm = np.clip(y_m / self.norm.pos_max_m, -1.0, 1.0)
+        r_norm = np.clip(r / self.norm.r_max, -1.0, 1.0)
+        u_x_norm = np.clip(u_x / self.norm.vel_max, -1.0, 1.0)
+        u_y_norm = np.clip(u_y / self.norm.vel_max, -1.0, 1.0)
+        b_norm = np.clip(b / self.norm.b_max, -1.0, 1.0)
     
         feats = np.array([
-            x_m,
-            y_m, 
+            x_norm,
+            y_norm, 
             np.sin(psi), 
             np.cos(psi), 
-            r,
-            u_x,
-            u_y,
-            b,
+            r_norm,
+            u_x_norm,
+            u_y_norm,
+            b_norm,
         ], dtype=np.float32)
 
         return feats
 
     
     def get_observation(self, k: int) -> np.ndarray:
+        """
+        Get observation for agent k with FIXED SIZE always (8 own + 18 for max 3 obstacles = 26 dims).
+        
+        This ensures consistent observation size regardless of actual obstacle count.
+        Unused obstacle slots are zero-filled but maintain consistent positions.
+        
+        Structure (always 26 dims):
+        - Dims 0-7: own state (x, y, sin(psi), cos(psi), r, u_x, u_y, b) - normalized
+        - Dims 8-13: obstacle 0 (dx, dy, sin(bearing), cos(bearing), du_x, du_y) - normalized
+        - Dims 14-19: obstacle 1 (6 dims) - zero-padded if not present
+        - Dims 20-25: obstacle 2 (6 dims) - zero-padded if not present
+        """
         own = self.own_state_features(k)
         xk_m, yk_m, psik, uk = self.X_all[k, 0], self.X_all[k, 1], self.X_all[k, 2], self.X_all[k, 5]
         
@@ -687,10 +743,17 @@ class MultiShipParallelEnv(ParallelEnv):
         uk_x = uk * np.cos(psik)
         uk_y = uk * np.sin(psik)
 
+        # Collect ALL obstacles (up to 3), zero-padding unused slots
         per_other = []
+        obstacle_idx = 0
+        
         for j in range(self.n_agents):
             if j == k:
                 continue
+            
+            # Only process up to 3 obstacles (curriculum supports max 4-ship = 3 obstacles)
+            if obstacle_idx >= 3:
+                break
             
             xj_m, yj_m, psij, uj = self.X_all[j, 0], self.X_all[j, 1], self.X_all[j, 2], self.X_all[j, 5]
             dx_m = xj_m - xk_m
@@ -701,27 +764,40 @@ class MultiShipParallelEnv(ParallelEnv):
             bearing_rel = self._wrap_angle(bearing - psik)
             sin_b, cos_b = np.sin(bearing_rel), np.cos(bearing_rel)
             
-            # Relative velocity: decompose into x and y components
-            # v_j = [uj * cos(psij), uj * sin(psij)]
-            # v_k = [uk * cos(psik), uk * sin(psik)]
-            # du = v_j - v_k
+            # Relative velocity components
             uj_x = uj * np.cos(psij)
             uj_y = uj * np.sin(psij)
             du_x = uj_x - uk_x
             du_y = uj_y - uk_y
+            
+            # NORMALIZATION: Clip relative position and velocity to [-1, 1]
+            dx_norm = np.clip(dx_m / self.norm.pos_max_m, -1.0, 1.0)
+            dy_norm = np.clip(dy_m / self.norm.pos_max_m, -1.0, 1.0)
+            du_x_norm = np.clip(du_x / self.norm.vel_max, -1.0, 1.0)
+            du_y_norm = np.clip(du_y / self.norm.vel_max, -1.0, 1.0)
 
             vec = np.array([
-                dx_m,
-                dy_m,
+                dx_norm,
+                dy_norm,
                 sin_b,
                 cos_b,
-                du_x,
-                du_y,
+                du_x_norm,
+                du_y_norm,
             ], dtype=np.float32)
 
             per_other.append(vec)
+            obstacle_idx += 1
         
+        # Pad with zero obstacles to reach exactly 3 obstacles (18 dims)
+        while obstacle_idx < 3:
+            per_other.append(np.zeros(6, dtype=np.float32))
+            obstacle_idx += 1
+        
+        # Concatenate: own (8 dims) + obstacles (18 dims) = 26 dims ALWAYS
         obs = np.concatenate([own] + per_other, axis=0).astype(np.float32)
+        
+        # Ensure exactly 26 dims
+        assert len(obs) == 26, f"Observation size mismatch: expected 26, got {len(obs)}"
 
         # Safety: if NaNs appear, replace with zero (shouldn't happen with continuous features)
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
@@ -823,26 +899,26 @@ class MultiShipParallelEnv(ParallelEnv):
                 delta_progress = goal_progress - prev_progress
                 self.prev_goal_progress_all[agent] = goal_progress
                 
-                # Per-step progress reward scaled to compete with risk penalty
-                w_along = 1000.0
+                # Primary reward: progress toward goal
+                w_along = self.reward_weights['progress']
                 r_along = w_along * delta_progress                
             else:
                 # Agent already reached goal - no waypoint following reward
                 r_along = 0.0
-                r_cross = 0.0
 
             total += r_along
 
-            # risk penalty: discourage large collision risk with any other vessel
+            # Risk penalty: continuous penalty for high-risk configurations
+            # Especially important for harder 4-ship cases to prevent collisions
             agent_risks = pair_risk[k].copy()
             agent_risks[k] = 0.0 
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
             
-            w_risk = -2.0
-            total += w_risk * max_risk
+            w_risk = self.reward_weights['risk']
+            if w_risk < 0:  # Apply risk penalty if configured for this difficulty
+                total += w_risk * max_risk
         
-
             # only update metrics if agent hasn't reached goal yet
             if not agent_already_done:
                 self.episode_metrics[agent]["risk_exposure"] += max_risk * self.dt
@@ -862,32 +938,35 @@ class MultiShipParallelEnv(ParallelEnv):
 
             infos[agent]["t"] = self.t
 
-            # separation margin reward: bonus to maintain safe distance
-            safe_dist_m = LOA * 3.0
-            sep_cap_m = 500.0  # no reward/penalty beyond this range
+            # Separation margin reward: bonus for maintaining safe distance (shaping signal)
+            # Without this, policy will behave riskily and prioritize speed over safety
+            # Difficulty-aware: harder cases get stronger bonuses/penalties
+            safe_dist_m = LOA * 3.0  # ~90m for typical 30m ships
+            sep_cap_m = 500.0  # cap reward beyond this distance
             min_dist = float(np.min(pair_dist[k][np.isfinite(pair_dist[k])])) if np.any(np.isfinite(pair_dist[k])) else np.inf
 
-            # Keep this term weak so it does not dominate episode return.
             if min_dist > sep_cap_m:
-                # Beyond cap: no separation reward (avoids rewarding staying far away)
+                # Beyond cap: no separation reward
                 pass
             elif min_dist > safe_dist_m:
-                w_safe = 0.5
+                # Safe zone: bonus for maintaining safe distance (difficulty-aware)
+                w_safe = self.reward_weights['separation']
                 frac = 1.0 - (min_dist - safe_dist_m) / (sep_cap_m - safe_dist_m)
                 r_separation = w_safe * float(np.clip(frac, 0.0, 1.0))
                 total += r_separation
             elif min_dist > LOA and min_dist <= safe_dist_m:
-                w_warning = -2.0
+                # Warning zone: penalty for being too close (difficulty-aware)
+                w_warning = self.reward_weights['warning']
                 r_separation = w_warning * (1.0 - (min_dist - LOA) / safe_dist_m)
                 total += r_separation
-                        
+
             # Collision penalty: large negative reward for actual collision
-            # If any collision occurred this step, apply heavy penalty 
+            # Difficulty-aware: harder cases (4-ship) get more severe penalties
             finite_d = np.isfinite(pair_dist[k])
             min_dist = float(np.min(pair_dist[k][finite_d])) if np.any(finite_d) else np.inf
             collision = (min_dist < LOA)
 
-            w_collision = -1000.0  # Massively penalize collision to incentivize avoidance
+            w_collision = self.reward_weights['collision']
 
             if collision:
                 if self.episode_metrics[agent]["collision"] == 0:
@@ -916,7 +995,7 @@ class MultiShipParallelEnv(ParallelEnv):
             else:
                 final_reached = final_waypoint_reached_by_index
 
-            w_success = 500.0
+            w_success = self.reward_weights['success']
 
             # OPTION 2: Only grant success bonus if NO collision occurred during entire episode
             # This ensures agent learns to prioritize avoidance over reaching goal

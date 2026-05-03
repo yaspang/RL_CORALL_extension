@@ -36,6 +36,7 @@ Then compare performance across all three cases.
 """
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from datetime import datetime
@@ -81,6 +82,16 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         if output_dir:
             self.diagnostics_file = output_dir / "logger_diagnostics.txt"
         
+        # Cache for unwrapped base environment (found once on first access, reused thereafter)
+        self._base_env_cached = None
+        self._base_env_cache_attempted = False
+        self._curriculum_update_count = 0  # Track how many times curriculum update succeeded
+        self._curriculum_logged = False  # Track if we've logged curriculum status
+        
+        # Observation shape tracking for diagnostics
+        self._obs_shapes_seen = {}  # {step: (shape, case, num_ships)}
+        self._last_logged_step = 0
+        
         # Running statistics for normalization (separate per ship count)
         self.ship_count_stats = {
             2: {"returns": [], "mean": 0.0, "std": 1.0},
@@ -113,8 +124,198 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
                     # Ensure std doesn't get too small (causes numerical issues)
                     self.ship_count_stats[ship_count]["std"] = max(std_val, 1e-6)
     
+    def _get_base_env(self):
+        """Unwrap and cache the base environment (curriculum-aware env) from VecEnv wrapper.
+        
+        Strategy: Keep unwrapping wrappers until we find one with update_step() method.
+        Done once and reused to minimize attribute access errors.
+        """
+        # Return cached value if already attempted
+        if self._base_env_cache_attempted:
+            return self._base_env_cached
+        
+        # Mark that we've tried (only attempt once)
+        self._base_env_cache_attempted = True
+        
+        # Print to console as primary debug method
+        print("\n[CURRICULUM UNWRAP DEBUG START]", flush=True)
+        sys.stdout.flush()
+        
+        try:
+            # Safety checks first
+            if self.model is None or self.model.env is None:
+                print("[X] model or model.env is None", flush=True)
+                print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                sys.stdout.flush()
+                return None
+            
+            env = self.model.env
+            print(f"[+] model.env exists: {type(env).__name__}", flush=True)
+            sys.stdout.flush()
+            
+            # Strategy 1: Try .envs[0] (DummyVecEnv)
+            print("\nStrategy 1: Unwrap via .envs[0] then keep unwrapping until update_step found", flush=True)
+            sys.stdout.flush()
+            try:
+                envs = getattr(env, 'envs', None)
+                if envs is not None and isinstance(envs, (list, tuple)) and len(envs) > 0:
+                    current = envs[0]
+                    print(f"  [+] Got .envs[0]: {type(current).__name__}", flush=True)
+                    sys.stdout.flush()
+                    
+                    # Keep unwrapping wrappers until we find update_step()
+                    depth = 0
+                    max_depth = 10  # Safety limit
+                    while depth < max_depth:
+                        if hasattr(current, 'update_step'):
+                            print(f"  [+] Found update_step() at depth {depth}: {type(current).__name__}", flush=True)
+                            self._base_env_cached = current
+                            print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                            sys.stdout.flush()
+                            return self._base_env_cached
+                        
+                        # Try to unwrap one more level
+                        next_env = getattr(current, 'env', None)
+                        if next_env is not None and next_env != current:
+                            print(f"  Depth {depth}: {type(current).__name__} -> unwrapping to {type(next_env).__name__}", flush=True)
+                            sys.stdout.flush()
+                            current = next_env
+                            depth += 1
+                        else:
+                            # Can't unwrap further
+                            print(f"  [X] Reached final wrapper at depth {depth}: {type(current).__name__}, no .env or same object", flush=True)
+                            print(f"  [X] Has update_step: {hasattr(current, 'update_step')}", flush=True)
+                            sys.stdout.flush()
+                            break
+                    
+                    # If we got here, didn't find update_step
+                    print(f"\n[X] Did not find update_step after unwrapping {depth} levels", flush=True)
+                    print(f"    Final env: {type(current).__name__}", flush=True)
+                    print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                    sys.stdout.flush()
+                    return None
+                else:
+                    print(f"  [X] No .envs or invalid: {type(envs).__name__}", flush=True)
+                    sys.stdout.flush()
+            except Exception as e:
+                print(f"  [X] EXCEPTION: {type(e).__name__}: {str(e)[:100]}", flush=True)
+                sys.stdout.flush()
+            
+            # If Strategy 1 failed, Strategy 2: Direct unwrap via .env
+            print("\nStrategy 2: Direct unwrap via .env with loop", flush=True)
+            sys.stdout.flush()
+            try:
+                current = env
+                depth = 0
+                max_depth = 10
+                
+                while depth < max_depth:
+                    if hasattr(current, 'update_step'):
+                        print(f"  [+] Found update_step() at depth {depth}: {type(current).__name__}", flush=True)
+                        self._base_env_cached = current
+                        print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                        sys.stdout.flush()
+                        return self._base_env_cached
+                    
+                    next_env = getattr(current, 'env', None)
+                    if next_env is not None and next_env != current:
+                        print(f"  Depth {depth}: {type(current).__name__} -> {type(next_env).__name__}", flush=True)
+                        sys.stdout.flush()
+                        current = next_env
+                        depth += 1
+                    else:
+                        break
+                
+                print(f"  [X] Reached depth {depth}, no update_step found", flush=True)
+                print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                sys.stdout.flush()
+                return None
+                
+            except Exception as e:
+                print(f"  [X] EXCEPTION: {type(e).__name__}: {str(e)[:100]}", flush=True)
+                print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+                sys.stdout.flush()
+                return None
+            
+        except Exception as e:
+            # Any outer exception
+            print(f"\n[X] OUTER EXCEPTION: {type(e).__name__}: {e}", flush=True)
+            print("[CURRICULUM UNWRAP DEBUG END]\n", flush=True)
+            sys.stdout.flush()
+            return None
+    
+    def _save_curriculum_debug(self, debug_lines):
+        """Save curriculum debug output to file."""
+        # Try multiple locations
+        locations = [
+            self.output_dir / "curriculum_debug.txt" if self.output_dir else None,
+            Path("./curriculum_debug.txt"),
+        ]
+        
+        for loc in locations:
+            if loc is None:
+                continue
+            try:
+                with open(loc, 'w') as f:
+                    f.write("\n".join(debug_lines))
+                break
+            except:
+                continue
+    
     def _on_step(self) -> bool:
         """Called after each environment step."""
+        # DEBUG: First step - verify callback is running
+        if self.num_timesteps == 1:
+            print(f"\n[CALLBACK DEBUG] _on_step() called at timestep 1", flush=True)
+            print(f"[CALLBACK DEBUG] self.model exists: {self.model is not None}", flush=True)
+            print(f"[CALLBACK DEBUG] self.model.env exists: {self.model is not None and self.model.env is not None}", flush=True)
+            sys.stdout.flush()
+        
+        # Track observation shapes for diagnostics at curriculum transitions
+        if self.num_timesteps % 10000 == 0:
+            try:
+                # Try to get observation from base env (RandomCaseEnv has current_case info)
+                base_env = self._get_base_env() if not hasattr(self, '_obs_diagnostics_done') else None
+                if base_env is not None and hasattr(base_env, 'current_case'):
+                    case = base_env.current_case
+                    # Infer ship count from case
+                    ships = 2 if case in range(1, 5) else (3 if case in range(5, 12) else 4 if case in range(12, 24) else 0)
+                    self._obs_shapes_seen[self.num_timesteps] = (case, ships)
+            except:
+                pass
+        
+        # Update curriculum step via cached base environment
+        # Get base_env once per training session (cached after first call)
+        base_env = self._get_base_env()
+        
+        # Call update_step if both base_env exists and has the method
+        if base_env is not None and hasattr(base_env, 'update_step'):
+            try:
+                base_env.update_step(self.num_timesteps)
+                self._curriculum_update_count += 1
+                
+                # Log curriculum status on first successful call
+                if not self._curriculum_logged:
+                    print(f"\n[+] Curriculum learning ACTIVE - update_step() successfully called", flush=True)
+                    print(f"  Base env: {type(base_env).__name__}", flush=True)
+                    print(f"  Training will progress: 2-ship (0-500k) -> 2/3-ship (500k-1M) -> 2/3/4-ship (1M+)\n", flush=True)
+                    self._curriculum_logged = True
+                    sys.stdout.flush()
+                    
+            except Exception as e:
+                if self.verbose and self.num_timesteps == 1000:
+                    print(f"  [!] Warning: Curriculum update_step() failed: {e}", flush=True)
+                    sys.stdout.flush()
+                pass
+        elif not self._curriculum_logged and self.num_timesteps > 5000:
+            # Log failure to find base_env
+            if self.verbose:
+                print(f"\n[!] Curriculum learning NOT ACTIVE - could not find base_env", flush=True)
+                print(f"  All {self.num_timesteps} steps training on mixed distribution (no curriculum)", flush=True)
+                print(f"  getattr result: {type(base_env)}\n", flush=True)
+                sys.stdout.flush()
+            self._curriculum_logged = True  # Only warn once
+        
         # Print available logger keys on first substantial step (after ~1% of data collected)
         if not self.logger_keys_printed and self.num_timesteps > 500:
             self._print_available_keys()
@@ -217,6 +418,13 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
         print("TRAINING COMPLETE - CONVERGENCE METRICS")
         print("=" * 80)
         
+        # Curriculum diagnostics
+        print(f"\nCurriculum Learning Status:")
+        if self._curriculum_update_count > 0:
+            print(f"  ✓ Active: {self._curriculum_update_count:,} successful update_step() calls")
+        else:
+            print(f"  ✗ NOT ACTIVE: No curriculum updates (training on fixed distribution)")
+        
         if not self.logger_keys_printed:
             print("\n[Info] Logger keys were never printed - first checkpoint may not have been reached")
         
@@ -270,59 +478,75 @@ def create_output_dir(timestamp: str) -> Path:
 def plot_training_convergence(timesteps: list, train_returns_normalized: list, val_returns: list, output_path: Path,
                               returns_2ship_normalized: Optional[list] = None, returns_3ship_normalized: Optional[list] = None, 
                               returns_4ship_normalized: Optional[list] = None, train_returns_raw: Optional[list] = None,
-                              use_raw_for_plot: bool = False, show_overall: bool = True):
+                              returns_2ship_raw: Optional[list] = None, returns_3ship_raw: Optional[list] = None,
+                              returns_4ship_raw: Optional[list] = None,
+                              use_raw_for_plot: bool = True, show_overall: bool = True):
     """
-    Plot training convergence curve with normalized returns.
+    Plot training convergence curve with RAW returns (no normalization).
     
-    Uses NORMALIZED returns for cleaner visualization (centered per scenario type).
-    Shows all three scenario types on same plot to demonstrate balanced learning.
+    Shows actual episode returns to reveal the real learning signal.
+    Includes per-scenario-type breakdown to show balanced learning across 2/3/4-ship.
     
     Parameters:
-        train_returns_normalized: Normalized overall returns for plotting
-        returns_*ship_normalized: Normalized returns per scenario type
-        train_returns_raw: Raw returns for subtitle reference
+        timesteps: Training step counts
+        train_returns_raw: RAW overall returns (used by default)
+        train_returns_normalized: Normalized returns (for comparison if needed)
+        returns_*ship_raw: RAW returns per scenario type
+        returns_*ship_normalized: Normalized per-scenario returns
+        use_raw_for_plot: If True (default), plot raw returns; if False, plot normalized
+        show_overall: Include overall training return line
     """
-    if not timesteps or not train_returns_normalized:
+    if not timesteps:
         print("  [Skipped convergence plot - no training data collected]")
         return
     
-    print(f"  Plotting {len(timesteps)} checkpoints (normalized)...")
+    # Choose data source
+    if use_raw_for_plot and train_returns_raw:
+        train_data = train_returns_raw
+        returns_2ship_data = returns_2ship_raw if returns_2ship_raw else returns_2ship_normalized
+        returns_3ship_data = returns_3ship_raw if returns_3ship_raw else returns_3ship_normalized
+        returns_4ship_data = returns_4ship_raw if returns_4ship_raw else returns_4ship_normalized
+        data_type = "Raw"
+    else:
+        train_data = train_returns_normalized
+        returns_2ship_data = returns_2ship_normalized
+        returns_3ship_data = returns_3ship_normalized
+        returns_4ship_data = returns_4ship_normalized
+        data_type = "Normalized"
+    
+    if not train_data:
+        print("  [Skipped convergence plot - no training data collected]")
+        return
+    
+    print(f"  Plotting {len(timesteps)} checkpoints ({data_type} returns)...")
     
     # Filter to only finite values for plotting
     timesteps_arr = np.array(timesteps, dtype=float)
-    train_norm_arr = np.array(train_returns_normalized, dtype=float)
+    train_arr = np.array(train_data, dtype=float)
     
     # Create mask for finite values
-    mask = np.isfinite(train_norm_arr)
+    mask = np.isfinite(train_arr)
     if not np.any(mask):
-        print("  [Skipped convergence plot - no valid training data (all NaN/inf)]")
+        print(f"  [Skipped convergence plot - no valid {data_type} data (all NaN/inf)]")
         return
     
     # Filter arrays
     timesteps_valid = timesteps_arr[mask]
-    train_norm_valid = train_norm_arr[mask]
-    
-    # If we have raw data, compute its statistics for subtitle
-    raw_info = ""
-    if train_returns_raw:
-        raw_arr = np.array(train_returns_raw, dtype=float)
-        raw_valid = raw_arr[np.isfinite(raw_arr)]
-        if len(raw_valid) > 0:
-            raw_info = f" (Raw: mean={np.mean(raw_valid):.1f}, range=[{np.min(raw_valid):.1f}, {np.max(raw_valid):.1f}])"
+    train_valid = train_arr[mask]
     
     fig, ax = plt.subplots(figsize=(14, 7))
     
     timesteps_m = timesteps_valid / 1e6
     
-    # Plot overall training returns (if requested - only for raw plot)
+    # Plot overall training returns
     if show_overall:
-        ax.plot(timesteps_m, train_norm_valid, linewidth=2.5, marker='o', 
+        ax.plot(timesteps_m, train_valid, linewidth=2.5, marker='o', 
                 markersize=5, color='steelblue', label='Overall (last 50 ep)', zorder=3)
     
-    # Plot per-ship-count returns (normalized)
+    # Plot per-ship-count returns
     ship_colors = {2: '#2ca02c', 3: '#ff7f0e', 4: '#d62728'}
     ship_labels = {2: '2-ship cases', 3: '3-ship cases', 4: '4-ship cases'}
-    for n_ships, data in [(2, returns_2ship_normalized), (3, returns_3ship_normalized), (4, returns_4ship_normalized)]:
+    for n_ships, data in [(2, returns_2ship_data), (3, returns_3ship_data), (4, returns_4ship_data)]:
         if data and len(data) == len(timesteps):
             arr = np.array(data, dtype=float)
             # Use same mask for consistency
@@ -332,37 +556,36 @@ def plot_training_convergence(timesteps: list, train_returns_normalized: list, v
                 ax.plot(timesteps_m[valid_mask], arr_valid[valid_mask], linewidth=1.5, alpha=0.7,
                         color=ship_colors[n_ships], label=ship_labels[n_ships], zorder=2)
     
-    # Add trend line with very aggressive exponential smoothing (only for overall)
-    if show_overall and len(train_norm_valid) > 3:
-        # Use very low alpha for heavy smoothing (alpha=0.05 = 5% recent, 95% history)
-        alpha = 0.05  # Very conservative - heavy smoothing
-        ema = np.zeros_like(train_norm_valid)
-        ema[0] = train_norm_valid[0]
-        for i in range(1, len(train_norm_valid)):
-            ema[i] = alpha * train_norm_valid[i] + (1 - alpha) * ema[i-1]
+    # Add trend line with exponential smoothing
+    if show_overall and len(train_valid) > 3:
+        alpha = 0.05  # Heavy smoothing to reveal trend
+        ema = np.zeros_like(train_valid)
+        ema[0] = train_valid[0]
+        for i in range(1, len(train_valid)):
+            ema[i] = alpha * train_valid[i] + (1 - alpha) * ema[i-1]
         ax.plot(timesteps_m, ema, linewidth=3.5, linestyle='--', 
                 color='navy', alpha=0.8, label='Trend (EMA)', zorder=2.5)
     
     # Reference lines
-    ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1, label='Baseline (μ)')
+    if data_type == "Normalized":
+        ax.axhline(y=0, color='gray', linestyle=':', alpha=0.5, linewidth=1, label='Baseline (μ)')
     
     ax.set_xlabel('Training Steps (Millions)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Mean Episode Return', fontsize=12, fontweight='bold')
-    plot_type = "Raw" if use_raw_for_plot else "Normalized"
-    ax.set_title(f'Generalized Policy Training Return ({plot_type} by Scenario Type)' + raw_info, 
+    ax.set_title(f'Generalized Policy Training Return ({data_type} - No Distortion)', 
                  fontsize=13, fontweight='bold')
     ax.grid(True, alpha=0.3, zorder=1)
     ax.legend(fontsize=11, loc='best')
     
     # Auto-scale with some padding
-    y_min, y_max = np.min(train_norm_valid), np.max(train_norm_valid)
+    y_min, y_max = np.min(train_valid), np.max(train_valid)
     y_pad = max(0.5, (y_max - y_min) * 0.1)
     ax.set_ylim(y_min - y_pad, y_max + y_pad)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
     plt.close(fig)
-    print(f"  ✓ Convergence plot saved to: {output_path.name} ({len(train_norm_valid)} valid points)")
+    print(f"  ✓ Convergence plot saved to: {output_path.name} ({len(train_valid)} valid points, {data_type})")
 
 
 def main():
@@ -383,12 +606,12 @@ def main():
                         help="Training batch size (default: 512)")
     parser.add_argument("--rollout_frag", type=int, default=256,
                         help="Rollout fragment length (default: 256)")
-    parser.add_argument("--normalize_rewards", action="store_true", default=True,
-                        help="Normalize rewards by scenario type for smoother training (default: True)")
+    parser.add_argument("--normalize_rewards", action="store_true", default=False,
+                        help="Normalize rewards by scenario type (default: False - raw rewards for curriculum)")
     parser.add_argument("--no_normalize_rewards", dest="normalize_rewards", action="store_false",
-                        help="Disable reward normalization (for ablation studies)")
-    parser.add_argument("--mlp_hiddens", type=int, nargs=2, default=[128, 128],
-                        help="MLP hidden layer sizes (default: 128 128)")
+                        help="Explicitly disable reward normalization")
+    parser.add_argument("--mlp_hiddens", type=int, nargs=2, default=[256, 256],
+                        help="MLP hidden layer sizes (default: 256 256)")
     parser.add_argument("--seed", type=int, default=0,
                         help="Random seed (default: 0)")
     parser.add_argument("--master_seed", type=int, default=None,
@@ -445,6 +668,7 @@ def main():
             desired_cross_x_nmi=args.desired_cross_x_nmi,
             target_speed_mps=args.target_speed_mps,
             ownship_speed_mps=args.ownship_speed_mps,
+            enable_curriculum=True,  # Enable curriculum by agent count (2-ship -> 3-ship -> 4-ship)
         )
         
         # Wrap with reward normalizer to stabilize training across scenario types
@@ -511,6 +735,15 @@ def main():
             progress_bar=True,
         )
         
+        # Diagnostic: log observed cases and their ship counts during training
+        if hasattr(metrics_callback, '_obs_shapes_seen') and metrics_callback._obs_shapes_seen:
+            print("\n[OBSERVATION SHAPE DIAGNOSTICS]")
+            print("Cases observed during training (at 10k-step checkpoints):")
+            for step in sorted(metrics_callback._obs_shapes_seen.keys()):
+                case, ships = metrics_callback._obs_shapes_seen[step]
+                print(f"  Step {step:7d}M: Case {case:2d} ({ships}-ship)")
+            sys.stdout.flush()
+        
         # Save final model
         final_path = output_dir / "best_checkpoint.zip"
         model.save(str(final_path))
@@ -527,28 +760,37 @@ def main():
         norm_valid = [x for x in metrics_callback.train_returns_normalized if np.isfinite(x)]
         
         if len(raw_valid) > 0:
-            # Plot raw returns (with overall line and trend)
-            plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns, 
-                                     metrics_callback.val_returns,
-                                     output_dir / "training_convergence_raw.png",
-                                     returns_2ship_normalized=metrics_callback.returns_2ship,
-                                     returns_3ship_normalized=metrics_callback.returns_3ship,
-                                     returns_4ship_normalized=metrics_callback.returns_4ship,
-                                     train_returns_raw=metrics_callback.train_returns,
-                                     use_raw_for_plot=True,
-                                     show_overall=True)
+            # Plot raw returns (with overall line and trend) - NO NORMALIZATION
+            plot_training_convergence(
+                metrics_callback.timesteps, 
+                metrics_callback.train_returns_normalized,  # dummy param
+                metrics_callback.val_returns,
+                output_dir / "training_convergence_raw.png",
+                returns_2ship_normalized=metrics_callback.returns_2ship_normalized,  # dummy
+                returns_3ship_normalized=metrics_callback.returns_3ship_normalized,  # dummy
+                returns_4ship_normalized=metrics_callback.returns_4ship_normalized,  # dummy
+                train_returns_raw=metrics_callback.train_returns,  # REAL RAW DATA
+                returns_2ship_raw=metrics_callback.returns_2ship,  # REAL RAW DATA
+                returns_3ship_raw=metrics_callback.returns_3ship,  # REAL RAW DATA
+                returns_4ship_raw=metrics_callback.returns_4ship,  # REAL RAW DATA
+                use_raw_for_plot=True,  # Use raw, not normalized
+                show_overall=True
+            )
         
         if len(norm_valid) > 0:
-            # Plot normalized returns per scenario type (NO overall line, only per-scenario)
-            plot_training_convergence(metrics_callback.timesteps, metrics_callback.train_returns_normalized, 
-                                     metrics_callback.val_returns,
-                                     output_dir / "training_convergence_normalized.png",
-                                     returns_2ship_normalized=metrics_callback.returns_2ship_normalized,
-                                     returns_3ship_normalized=metrics_callback.returns_3ship_normalized,
-                                     returns_4ship_normalized=metrics_callback.returns_4ship_normalized,
-                                     train_returns_raw=metrics_callback.train_returns,
-                                     use_raw_for_plot=False,
-                                     show_overall=False)
+            # Plot normalized returns per scenario type for reference
+            plot_training_convergence(
+                metrics_callback.timesteps, 
+                metrics_callback.train_returns_normalized,  # NORMALIZED DATA
+                metrics_callback.val_returns,
+                output_dir / "training_convergence_normalized.png",
+                returns_2ship_normalized=metrics_callback.returns_2ship_normalized,  # NORMALIZED DATA
+                returns_3ship_normalized=metrics_callback.returns_3ship_normalized,  # NORMALIZED DATA
+                returns_4ship_normalized=metrics_callback.returns_4ship_normalized,  # NORMALIZED DATA
+                train_returns_raw=metrics_callback.train_returns,  # raw for reference only
+                use_raw_for_plot=False,  # Use normalized
+                show_overall=False
+            )
         
         if len(raw_valid) == 0 and len(norm_valid) == 0:
             print("  ⚠️  No valid training data to plot!")

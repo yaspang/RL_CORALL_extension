@@ -65,7 +65,21 @@ class RandomCaseEnv(gym.Wrapper):
         6: 8 + 2*6,   # 2 obstacles = 20
         21: 8 + 3*6,  # 3 obstacles = 26
     }
-    MAX_OBS_SIZE = 26  # Case 21
+    MAX_OBS_SIZE = 26  # Case 21 (max 3 obstacles)
+    
+    # Case groupings by agent count
+    CASES_2SHIP = list(range(1, 5))      # Cases 1-4: 2-ship scenarios
+    CASES_3SHIP = list(range(5, 12))     # Cases 5-11: 3-ship scenarios
+    CASES_4SHIP = list(range(12, 23))    # Cases 12-22: 4-ship scenarios
+    
+    # Curriculum phases: (step_threshold, available_cases)
+    # Trains on all cases within each difficulty group, not just representative samples
+    CURRICULUM_PHASES = [
+        (0, CASES_2SHIP),                           # Phase 1: 2-ship cases only [1-4]
+        (500000, CASES_2SHIP + CASES_3SHIP),       # Phase 2: 2-ship + 3-ship [1-11]
+        (1000000, CASES_2SHIP + CASES_3SHIP + CASES_4SHIP),  # Phase 3: all scenarios [1-22]
+    ]
+    CURRICULUM_TRANSITION = 200000  # steps for smooth blending (increased from 50k to 200k)
     
     def __init__(
         self,
@@ -81,6 +95,7 @@ class RandomCaseEnv(gym.Wrapper):
         desired_cross_x_nmi: float = 1.0,
         target_speed_mps: float = 10.0,
         ownship_speed_mps: Optional[float] = None,
+        enable_curriculum: bool = True,
     ):
         # Create initial environment (case doesn't matter, will be randomized at reset)
         base_env = SingleAgentOwnshipEnv(
@@ -113,6 +128,10 @@ class RandomCaseEnv(gym.Wrapper):
         # Master RNG for reproducible case/seed sequence
         self.rng = np.random.default_rng(master_seed)
         
+        # Curriculum learning
+        self.enable_curriculum = enable_curriculum
+        self.current_step = 0
+        
         # Tracking for logging
         self.episode_count = 0
         self.current_case = cases_to_train[0]
@@ -125,7 +144,116 @@ class RandomCaseEnv(gym.Wrapper):
             shape=(self.MAX_OBS_SIZE,),
             dtype=np.float32
         )
+
+    def _get_curriculum_available_cases(self) -> List[int]:
+        """Get available cases at current training step based on curriculum."""
+        if not self.enable_curriculum:
+            return self.cases_to_train
+        
+        # Find current phase
+        current_phase_idx = 0
+        for i, (threshold, _) in enumerate(self.CURRICULUM_PHASES):
+            if self.current_step >= threshold:
+                current_phase_idx = i
+        
+        if current_phase_idx >= len(self.CURRICULUM_PHASES) - 1:
+            phase_cases = self.CURRICULUM_PHASES[-1][1]
+        else:
+            # Check if in transition window
+            next_threshold = self.CURRICULUM_PHASES[current_phase_idx + 1][0]
+            if self.current_step >= next_threshold - self.CURRICULUM_TRANSITION:
+                # Transition: blend both phases
+                current_cases = self.CURRICULUM_PHASES[current_phase_idx][1]
+                next_cases = self.CURRICULUM_PHASES[current_phase_idx + 1][1]
+                phase_cases = list(set(current_cases + next_cases))
+            else:
+                phase_cases = self.CURRICULUM_PHASES[current_phase_idx][1]
+        
+        # Filter by requested cases
+        available = [c for c in phase_cases if c in self.cases_to_train]
+        return available if available else self.cases_to_train
     
+    def _get_case_sampling_weights(self) -> dict:
+        """
+        Compute sampling weights for each case to prevent catastrophic forgetting.
+        During curriculum, gradually shift from easy (2-ship) to hard (4-ship) cases.
+        Within each phase, cases are sampled uniformly to prevent specialization.
+        
+        Returns: dict mapping case -> weight (will be normalized to probabilities)
+        """
+        available = self._get_curriculum_available_cases()
+        weights = {c: 0.0 for c in available}
+        
+        # Determine phase and transition progress
+        current_phase_idx = 0
+        for i, (threshold, _) in enumerate(self.CURRICULUM_PHASES):
+            if self.current_step >= threshold:
+                current_phase_idx = i
+        
+        if len(self.CURRICULUM_PHASES) > current_phase_idx + 1:
+            next_threshold = self.CURRICULUM_PHASES[current_phase_idx + 1][0]
+            transition_start = next_threshold - self.CURRICULUM_TRANSITION
+            
+            # Progress within current phase (0 = start, 1 = full transition to next)
+            if self.current_step < transition_start:
+                progress = 0.0  # At start of phase
+            else:
+                progress = min(1.0, (self.current_step - transition_start) / self.CURRICULUM_TRANSITION)
+        else:
+            progress = 1.0  # Final phase
+        
+        # Count how many available cases are in each category
+        avail_2ship = [c for c in available if c in self.CASES_2SHIP]
+        avail_3ship = [c for c in available if c in self.CASES_3SHIP]
+        avail_4ship = [c for c in available if c in self.CASES_4SHIP]
+        
+        # Assign weights based on phase with catastrophic forgetting prevention
+        if current_phase_idx == 0:  # Phase 1: 2-ship only
+            # Equal weight to all 2-ship cases to prevent specialization
+            weight_per_2ship = 1.0 / len(avail_2ship) if avail_2ship else 0.0
+            for c in avail_2ship:
+                weights[c] = weight_per_2ship
+        
+        elif current_phase_idx == 1:  # Phase 2: blend 2-ship and 3-ship
+            # Start with 50/50, gradually shift to 30% 2-ship / 70% 3-ship
+            pct_2ship = 0.5 - progress * 0.2  # 0.5 -> 0.3
+            pct_3ship = 0.5 + progress * 0.2  # 0.5 -> 0.7
+            
+            weight_per_2ship = pct_2ship / len(avail_2ship) if avail_2ship else 0.0
+            weight_per_3ship = pct_3ship / len(avail_3ship) if avail_3ship else 0.0
+            
+            for c in avail_2ship:
+                weights[c] = weight_per_2ship
+            for c in avail_3ship:
+                weights[c] = weight_per_3ship
+        
+        else:  # Phase 3: all three categories
+            # Distribute: 10% 2-ship, 30% 3-ship, 60% 4-ship
+            pct_2ship = 0.10
+            pct_3ship = 0.30
+            pct_4ship = 0.60
+            
+            weight_per_2ship = pct_2ship / len(avail_2ship) if avail_2ship else 0.0
+            weight_per_3ship = pct_3ship / len(avail_3ship) if avail_3ship else 0.0
+            weight_per_4ship = pct_4ship / len(avail_4ship) if avail_4ship else 0.0
+            
+            for c in avail_2ship:
+                weights[c] = weight_per_2ship
+            for c in avail_3ship:
+                weights[c] = weight_per_3ship
+            for c in avail_4ship:
+                weights[c] = weight_per_4ship
+        
+        # Normalize to sum to 1
+        total = sum(weights.values())
+        if total > 0:
+            weights = {c: w / total for c, w in weights.items()}
+        else:
+            # Fallback: uniform weight for all available cases
+            weights = {c: 1.0 / len(available) for c in available}
+        
+        return weights
+
     def _pad_observation(self, obs: np.ndarray, case: int) -> np.ndarray:
         """
         Pad observation to max size by zero-filling unused obstacle slots.
@@ -150,6 +278,7 @@ class RandomCaseEnv(gym.Wrapper):
         Reset environment with randomized case and seed.
         
         Uses master RNG for reproducible case/seed sequence.
+        If curriculum enabled, respects progressive case unlocking.
         Creates new SingleAgentOwnshipEnv with random case/seed each time.
         Returns observation padded to consistent max size.
         """
@@ -159,8 +288,29 @@ class RandomCaseEnv(gym.Wrapper):
         else:
             local_rng = self.rng
 
-        # Sample random case and seed
-        self.current_case = int(local_rng.choice(self.cases_to_train))
+        # Get curriculum-controlled available cases with importance weighting
+        available_cases = self._get_curriculum_available_cases()
+        case_weights = self._get_case_sampling_weights()
+        
+        # Sample case with weights (to prevent forgetting easier tasks)
+        case_probs = np.array([case_weights.get(c, 1.0 / len(available_cases)) for c in available_cases])
+        
+        # Defensive: ensure probabilities are valid (no NaN, sum to 1, all non-negative)
+        if len(available_cases) == 0:
+            raise ValueError("No available cases for sampling")
+        
+        prob_sum = case_probs.sum()
+        if prob_sum <= 0 or np.isnan(prob_sum) or np.isinf(prob_sum):
+            # Fallback to uniform probabilities if weights are invalid
+            case_probs = np.ones(len(available_cases)) / len(available_cases)
+        elif np.any(np.isnan(case_probs)) or np.any(np.isinf(case_probs)):
+            # If any individual probability is NaN/inf, use uniform
+            case_probs = np.ones(len(available_cases)) / len(available_cases)
+        else:
+            # Normal normalization
+            case_probs = case_probs / prob_sum
+        
+        self.current_case = int(local_rng.choice(available_cases, p=case_probs))
         self.current_seed = int(local_rng.integers(0, self.num_seeds))
         
         # Create new environment with random case/seed and geometry parameters
@@ -201,6 +351,10 @@ class RandomCaseEnv(gym.Wrapper):
         info["seed"] = self.current_seed
         
         return obs, reward, terminated, truncated, info
+    
+    def update_step(self, step: int):
+        """Update current training step (called from training callback)."""
+        self.current_step = step
     
     def get_case_distribution(self) -> dict:
         """Get distribution of cases trained so far."""
