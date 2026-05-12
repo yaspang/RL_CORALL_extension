@@ -159,7 +159,7 @@ PPO.learn() (training loop with GeneralizedTrainingMetricsCallback)
 {
     'progress': 200.0,       # Delta progress toward goal
     'risk': -15.0,           # Moderate risk penalty
-    'separation': 2.0,       # Safe separation bonus
+    'separation': 2.0,       # Safe separation bonusgit co
     'collision': -600.0,     # Hard collision penalty
     'success': 250.0,        # Goal completion bonus
 }

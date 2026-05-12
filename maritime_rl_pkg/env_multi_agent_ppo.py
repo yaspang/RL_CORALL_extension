@@ -458,7 +458,7 @@ class MultiShipParallelEnv(ParallelEnv):
         """
         return {
             'progress': 200.0,       # delta-progress reward
-            'risk': -15.0,           # moderate risk penalty
+            'risk': -30.0,           # moderate risk penalty
             'separation': 2.0,       # safe separation reward
             'collision': -600.0,     # hard collision penalty 
             'success': 250.0,        # waypoint completion reward 
@@ -970,11 +970,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 frac = 1.0 - (min_dist - safe_dist_m) / (sep_cap_m - safe_dist_m)
                 r_separation = w_safe * float(np.clip(frac, 0.0, 1.0))
                 total += r_separation
-            elif min_dist > LOA and min_dist <= safe_dist_m:
-                # Warning zone: penalty for being too close (difficulty-aware)
-                w_warning = self.reward_weights['warning']
-                r_separation = w_warning * (1.0 - (min_dist - LOA) / safe_dist_m)
-                total += r_separation
+
 
             # Collision penalty: large negative reward for actual collision
             # Difficulty-aware: harder cases (4-ship) get more severe penalties
