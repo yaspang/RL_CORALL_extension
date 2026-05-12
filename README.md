@@ -362,7 +362,7 @@ All cases normalized to consistent 29-dim observation space:
 
 **Normalization Bounds**:
 - Position: ±15,000m (scenario extent)
-- Velocity: ±15 m/s (typical ship speeds)
+- Velocity: ±15 m/s (max typical ship speeds)
 - Turn rate: ±0.5 rad/s
 - All features clipped to [-1, 1] for stable learning
 
