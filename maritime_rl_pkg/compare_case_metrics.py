@@ -1,10 +1,16 @@
 """
-Compare RL policy vs baseline across multiple metrics using bar charts:
+Compare RL policy vs baseline across multiple metrics using bar charts and line plots.
+
+Generated charts:
 1. Min Separation Distance by case (RL vs Baseline)
 2. Total path length by case with efficiency %
 3. Total time traveled by case with efficiency %
 4. Risk Exposure (time-weighted risk) by case
-5. Scaling graph: Min Separation Distance vs number of ships (agents) in environment
+5. Collision Rate by case (%)
+6. Success Rate by case (%) - guaranteed safe passage
+7. Summary: Success/Collision rates aggregated by complexity level (2/3/4-ship)
+8. Separation Distance Scaling: impact of total ship count
+9. Scaling Analysis: 2x2 grid (path length, time, separation distance, risk) across ship counts
 """
 
 import argparse

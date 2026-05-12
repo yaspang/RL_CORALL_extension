@@ -1,3 +1,10 @@
+"""
+Used by evaluation scripts to create CORALL-style episode history visualizations and trajectory overlays.
+- Saves /  loads episode histories from episode rollouts
+- Creates statistical comparison charts of DCPA, TCPA, Risk over time for baseline vs RL
+
+"""
+
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple

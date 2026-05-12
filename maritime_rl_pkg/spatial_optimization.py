@@ -3,6 +3,8 @@ Spatial optimization utilities for multi-agent environments.
 
 Provides AABB (axis-aligned bounding box) broad-phase filtering for efficient
 pairwise collision detection across many agents.
+
+Apply in increasingly dense environments for multi-agent control 
 """
 
 import numpy as np

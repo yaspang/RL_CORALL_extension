@@ -2,31 +2,31 @@
 Evaluate a trained GENERALIZED PPO policy (Stable-Baselines3).
 
 This script evaluates a policy trained with train_generalized_policy_sb3.py,
-which uses RandomCaseEnv to handle 29-dim observations across all cases (1, 6, 21).
+which uses RandomCaseEnv to handle 29-dim observations across all cases (1...22).
 
-GENERALIZED POLICY CHARACTERISTICS:
+Generalized Policy Features:
 ===================================
 - Observation size: 29-dim (v8: 8 own + 3 goal bearing/distance + 18 obstacles, padded across all cases)
 - Trained on all cases: 1-22 with full curriculum from loose to tight encounters
 - Single checkpoint that generalizes across all 22 case variants
 
-EVALUATION CAPABILITIES:
+Evaluation Capabilities:
 ========================
 - Evaluate on **any CORALL case (1-22)** with the generalized checkpoint
-- Policy trained on all 23 cases, from loose (scale=1.0) to tight encounters
+- Policy trained on all 22 cases, from loose (scale=1.0) to tight encounters
 - Metrics: collision rate, success rate, path length, DCPA, TCPA, risk
 - Episode history capture compatible with batch_animate_eval.py
 - Per-episode CSV + aggregated JSON results
 - Automatically identifies and reports best-return episode for visualization
 
-OUTPUT:
+Output:
 =======
 - Per-episode metrics (CSV)
 - Aggregate statistics (JSON)
 - Episode histories (NPZ files)
 - Best episode identification with batch_animate_eval command
 
-USAGE:
+Ex Usage:
 ======
 Evaluate generalized policy on case 1:
   python -m maritime_rl_pkg.eval_generalized_policy_sb3 \\
@@ -37,7 +37,7 @@ Evaluate generalized policy on case 1:
     --save_histories
 
 Evaluate on multiple cases to assess generalization:
-  for case in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21; do
+  for case in {1..22}; do
     python -m maritime_rl_pkg.eval_generalized_policy_sb3 \\
       --checkpoint "GENERALIZED_SB3_20260418-102845/best_checkpoint.zip" \\
       --case $case --episodes 50 --seed 0 --save_histories
@@ -46,7 +46,7 @@ Evaluate on multiple cases to assess generalization:
 Then animate best episode:
   python -m maritime_rl_pkg.batch_animate_eval policy_eval_generalized_sb3_case1_TIMESTAMP/
 
-OUTPUT STRUCTURE:
+Output Structure:
 =================
 policy_eval_generalized_sb3_case{X}_{timestamp}/
 └── seed_{seed}/

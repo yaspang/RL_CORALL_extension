@@ -1,5 +1,6 @@
 """
 Episode return tracking wrapper for direct access to episode statistics.
+Helps track and log episode metrics in real-time.
 
 This wrapper captures episode returns directly as episodes complete,
 bypassing SB3's logger/Monitor complexity.

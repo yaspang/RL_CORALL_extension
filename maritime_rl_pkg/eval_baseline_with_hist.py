@@ -1,4 +1,7 @@
-"""Used to rollout episodes that produce evaluation metrics for CORALL rule-based local planner baseline, with option to save per-step histories for visual episode overlay figures."""
+"""Used to rollout episodes that produce evaluation metrics for CORALL rule-based local planner baseline, 
+with option to save per-step histories for visual episode overlay figures.
+"""
+
 import argparse
 import json
 import csv

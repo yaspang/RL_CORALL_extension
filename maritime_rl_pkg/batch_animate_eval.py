@@ -1,10 +1,10 @@
 """
 Batch animate all episodes from a policy evaluation directory.
 
-Usage:
-python -m maritime_rl_pkg.batch_animate_eval \
-  --eval_dir "C:\path\to\policy_eval_case6_...\seed_0" \
-  --output_dir "C:\path\to\policy_eval_case6_...\seed_0\animations" \
+Ex Usage:
+python -m maritime_rl_pkg.batch_animate_eval 
+  --eval_dir "path" \
+  --output_dir "path" \
   --case 6 --ship_scale 2.0 --fps 20 --stride 4
 """
 

@@ -1,5 +1,5 @@
 """
-Train a generalized policy across multiple cases and seeds using Stable Baselines3 PPO.
+Train a generalized single-agent policy across multiple cases and seeds using Stable Baselines3 PPO.
 
 This script trains a single PPO policy on randomized test cases and seeds,
 producing a generalized collision avoidance policy trying to work across difficulty levels.
@@ -24,7 +24,6 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
-from maritime_rl_pkg.env_reward_normalizer import RewardNormalizerByShipCount
 from maritime_rl_pkg.episode_tracker import EpisodeReturnTracker
 
 
@@ -595,10 +594,6 @@ def main():
                         help="Training batch size (default: 512)")
     parser.add_argument("--rollout_frag", type=int, default=256,
                         help="Rollout fragment length (default: 256)")
-    parser.add_argument("--normalize_rewards", action="store_true", default=False,
-                        help="Normalize rewards by scenario type (default: False - raw rewards for curriculum)")
-    parser.add_argument("--no_normalize_rewards", dest="normalize_rewards", action="store_false",
-                        help="Explicitly disable reward normalization")
     parser.add_argument("--mlp_hiddens", type=int, nargs=2, default=[256, 256],
                         help="MLP hidden layer sizes (default: 256 256)")
     parser.add_argument("--seed", type=int, default=0,
@@ -630,7 +625,7 @@ def main():
     print(f"  Batch size:                {args.train_batch}")
     print(f"  Rollout fragment length:   {args.rollout_frag}")
     print(f"  Learning rate:             {args.lr}")
-    print(f"  Reward normalization:      {'ON (by scenario type)' if args.normalize_rewards else 'OFF'}")
+
     print(f"  Desired encounter distance (nmi): {args.desired_cross_x_nmi}")
     print(f"  Obstacle speed (m/s):      {args.target_speed_mps}")
     print(f"  Ownship speed (m/s):       {args.ownship_speed_mps if args.ownship_speed_mps else 'inherit from obstacles'}")
@@ -660,8 +655,6 @@ def main():
             enable_curriculum=True,  # Enable curriculum by agent count (2-ship -> 3-ship -> 4-ship)
         )
         
-        # Wrap with reward normalizer to stabilize training across scenario types
-        env = RewardNormalizerByShipCount(env, normalize_rewards=args.normalize_rewards, verbose=False)
         
         # Wrap with Monitor for proper episode return tracking
         env = Monitor(env)
@@ -794,7 +787,7 @@ def main():
             "train_batch_size": args.train_batch,
             "rollout_fragment_length": args.rollout_frag,
             "mlp_hiddens": args.mlp_hiddens,
-            "normalize_rewards": args.normalize_rewards,
+
             "seed": args.seed,
             "cases_trained": args.cases,
             "num_seeds": 100,
