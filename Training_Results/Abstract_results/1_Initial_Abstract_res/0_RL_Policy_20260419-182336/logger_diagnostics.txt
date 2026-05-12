@@ -1,0 +1,20 @@
+
+================================================================================
+LOGGER KEYS AVAILABLE AT FIRST CHECKPOINT
+================================================================================
+
+Total keys: 10
+All keys: ['train/approx_kl', 'train/clip_fraction', 'train/clip_range', 'train/entropy_loss', 'train/explained_variance', 'train/learning_rate', 'train/loss', 'train/n_updates', 'train/policy_gradient_loss', 'train/value_loss']
+
+Key values:
+  train/approx_kl: 0.0006927377544343472
+  train/clip_fraction: 0.0
+  train/clip_range: 0.2
+  train/entropy_loss: -1.9442800998687744
+  train/explained_variance: -0.0969475507736206
+  train/learning_rate: 0.0001
+  train/loss: 13.010090827941895
+  train/n_updates: 30
+  train/policy_gradient_loss: -0.0031599362380802633
+  train/value_loss: 28.700366973876953
+================================================================================

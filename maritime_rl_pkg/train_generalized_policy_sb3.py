@@ -1,38 +1,14 @@
 """
-Train a generalized policy across multiple cases and random seeds.
+Train a generalized policy across multiple cases and seeds using Stable Baselines3 PPO.
 
-This script trains a single PPO policy on randomized cases (1, 6, 21) and seeds,
-producing a generalized collision avoidance policy that works across difficulty levels.
-
-TRAINING STRATEGY:
-==================
-- Total steps: 1,000,000 (configurable)
-- Each reset: random case (1, 6, 21) and random seed [0, 99]
-- Policy learns to generalize across all encounter geometries and difficulties
-- Single checkpoint output (vs. three case-specific checkpoints)
-
-EXPECTED RESULTS:
-=================
-- Policy generalizes to loose (Case 1), medium (Case 6), tight (Case 21) encounters
-- Slightly lower performance on each individual case vs case-specific policies
-- Much better performance on unseen scenarios and real-world deployment
-- Training time: ~6-8 hours on GPU, ~12-16 hours on CPU
+This script trains a single PPO policy on randomized test cases and seeds,
+producing a generalized collision avoidance policy trying to work across difficulty levels.
 
 USAGE:
-======
 python -m maritime_rl_pkg.train_generalized_policy_sb3 \\
     --num_steps 1000000 \\
     --checkpoint_freq 50000 \\
     --num_workers 4
-
-EVALUATION:
-===========
-After training, evaluate on each case with:
-    python -m maritime_rl_pkg.eval_single_agent_sb3 \\
-        --checkpoint "/path/to/generalized/best_checkpoint.zip" \\
-        --case 1 --episodes 100 --seed 0 --save_histories
-
-Then compare performance across all three cases.
 """
 
 import argparse
@@ -482,16 +458,16 @@ def plot_training_convergence(timesteps: list, train_returns_normalized: list, v
                               returns_4ship_raw: Optional[list] = None,
                               use_raw_for_plot: bool = True, show_overall: bool = True):
     """
-    Plot training convergence curve with RAW returns (no normalization).
+    Plot training convergence curve with raw returns.
     
     Shows actual episode returns to reveal the real learning signal.
     Includes per-scenario-type breakdown to show balanced learning across 2/3/4-ship.
     
     Parameters:
         timesteps: Training step counts
-        train_returns_raw: RAW overall returns (used by default)
+        train_returns_raw: Raw overall returns (used by default)
         train_returns_normalized: Normalized returns (for comparison if needed)
-        returns_*ship_raw: RAW returns per scenario type
+        returns_*ship_raw: Raw returns per scenario type
         returns_*ship_normalized: Normalized per-scenario returns
         use_raw_for_plot: If True (default), plot raw returns; if False, plot normalized
         show_overall: Include overall training return line
@@ -577,8 +553,21 @@ def plot_training_convergence(timesteps: list, train_returns_normalized: list, v
     ax.grid(True, alpha=0.3, zorder=1)
     ax.legend(fontsize=11, loc='best')
     
-    # Auto-scale with some padding
-    y_min, y_max = np.min(train_valid), np.max(train_valid)
+    # Auto-scale with some padding - consider ALL plotted data, not just overall
+    all_valid_values = [train_valid]  # Start with overall data
+    
+    # Add per-ship data to auto-scale calculation
+    for n_ships, data in [(2, returns_2ship_data), (3, returns_3ship_data), (4, returns_4ship_data)]:
+        if data and len(data) == len(timesteps):
+            arr = np.array(data, dtype=float)
+            arr_valid = arr[mask]
+            valid_mask = np.isfinite(arr_valid)
+            if np.any(valid_mask):
+                all_valid_values.append(arr_valid[valid_mask])
+    
+    # Compute min/max across all plotted data
+    all_data_combined = np.concatenate(all_valid_values)
+    y_min, y_max = np.min(all_data_combined), np.max(all_data_combined)
     y_pad = max(0.5, (y_max - y_min) * 0.1)
     ax.set_ylim(y_min - y_pad, y_max + y_pad)
     
@@ -598,8 +587,8 @@ def main():
                         help="Save checkpoint every N steps (default: 50000)")
     parser.add_argument("--num_workers", type=int, default=1,
                         help="Number of parallel environments (default: 1)")
-    parser.add_argument("--lr", type=float, default=3e-4,
-                        help="Learning rate (default: 3e-4)")
+    parser.add_argument("--lr", type=float, default=1e-4,
+                        help="Learning rate (default: 1e-4)")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor (default: 0.99)")
     parser.add_argument("--train_batch", type=int, default=512,
@@ -793,7 +782,7 @@ def main():
             )
         
         if len(raw_valid) == 0 and len(norm_valid) == 0:
-            print("  ⚠️  No valid training data to plot!")
+            print("  No valid training data to plot!")
         
         # Save training config
         config = {

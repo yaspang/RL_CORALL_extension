@@ -141,6 +141,7 @@ class SingleAgentOwnshipEnv(gym.Env):
         self.last_reward_dict = {}
         self.last_done_dict = {}
         self.last_info_dict = {}
+        self.goal_reached = False  # Track if agent reached goal (to lock actions)
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
         """Reset environment and return ownship observation."""
@@ -149,6 +150,9 @@ class SingleAgentOwnshipEnv(gym.Env):
         # Store for later
         self.last_obs_dict = obs_dict
         self.last_info_dict = info_dict
+        
+        # Reset goal tracking
+        self.goal_reached = False
         
         # Return only ownship (agent_0) observation and info
         return obs_dict["ship_0"], info_dict.get("ship_0", {})
@@ -184,7 +188,15 @@ class SingleAgentOwnshipEnv(gym.Env):
         scripted_actions = {}
         
         # Ownship gets RL action (trained policy output)
-        scripted_actions["ship_0"] = action
+        # BUT: If agent already reached goal, force maintain action (center) to prevent retreat
+        ownship_action = action
+        if self.goal_reached:
+            center_heading = (self.env_multi.n_heading - 1) // 2
+            center_speed = 2  # Maintain current speed (center of 0-4 range)
+            ownship_action = np.array([center_heading, center_speed], dtype=np.int32)
+            # Keep maintaining until episode ends
+        
+        scripted_actions["ship_0"] = ownship_action
         
         # Obstacles use reactive avoidance: compute heading to avoid all vessels
         X_all = self.env_multi.X_all  # State: [x, y, psi, r, b, u]
@@ -219,6 +231,11 @@ class SingleAgentOwnshipEnv(gym.Env):
         terminated = terminated_dict.get("ship_0", False)
         truncated = truncated_dict.get("ship_0", False)
         info = info_dict.get("ship_0", {})
+        
+        # Track if agent reached goal (for action locking on next step)
+        success = info.get("success", False)
+        if success and not self.goal_reached:
+            self.goal_reached = True  # Lock actions from now on
         
         return obs, reward, terminated, truncated, info
 

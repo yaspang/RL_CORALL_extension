@@ -1,7 +1,7 @@
 """
 Multi-agent (PettingZoo ParallelEnv) for PPO training compatible with CORALL simulation base
 
-Every vessel in each of the Imazu cases is an agent -> in the frame of CORALL...
+Every vessel in each of the Imazu cases is an agent -> in the frame of CORALL
 - agent 0 is "ownship"
 - agents 1...K are former "obstacle ships" from CORALL get_obstacle_data(case_number)
 
@@ -12,6 +12,7 @@ Waypoints
 - stored in nautifcal miles (nmi) like CORALL, but state in meters (m)
 - ownship waypoints are case-driven (simple default waypoints provided)
 - other ships get a straight-line far waypoint along initial heading
+
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from risk_assessment.cpa_calculations_0speed import cpa_calculations_0speed
 from risk_assessment.risk_calculations import risk_calculations
 from navigation.reactive_avoidance import reactive_avoidance
 
-# future: spatial optimization (trying to implement later to optimize CPA calculations for many agents - see maritime_rl_pkg/maritime_rl/spatial_optimization.py)
+# future implementatation: spatial optimization (trying to implement later to optimize CPA calculations for many agents - see maritime_rl_pkg/maritime_rl/spatial_optimization.py)
 from .spatial_optimization import AABBBroadPhase
 
 NMI = 1852.0   # meters per nautical mile
@@ -167,17 +168,19 @@ class MultiShipParallelEnv(ParallelEnv):
         }
     
         # Observation Spaces: same for all n_agents
-        # Own state: [x, y, sin(psi), cos(psi), r, u_x, u_y, b] (8 features)
+        # Own state: [x, y, sin(psi), cos(psi), r, u_x, u_y, b, sin(goal_bearing), cos(goal_bearing), goal_distance_norm] (11 features)
         # u_x = u * cos(psi), u_y = u * sin(psi) for velocity components
-        own_dim = 8
+        # goal_bearing = angle from ownship to final goal waypoint
+        # goal_distance_norm = normalized distance to final goal (clipped to [-1, 1])
+        own_dim = 11
         # Per other agent: [dx, dy, sin(bearing_rel), cos(bearing_rel), du_x, du_y] (6 features)
         per_other_dim = 6
         obs_dim = own_dim + (self.n_agents - 1) * per_other_dim
         
         # Bounds for observation space
-        # Own state bounds: [x, y, sin(psi), cos(psi), r, u_x, u_y, b]
-        own_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, -self.norm.vel_max, -self.norm.vel_max, -self.norm.b_max], dtype=np.float32)
-        own_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.vel_max, self.norm.vel_max, self.norm.b_max], dtype=np.float32)
+        # Own state bounds: [x, y, sin(psi), cos(psi), r, u_x, u_y, b, sin(goal_bearing), cos(goal_bearing), goal_distance_norm]
+        own_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.r_max, -self.norm.vel_max, -self.norm.vel_max, -self.norm.b_max, -1.0, -1.0, -1.0], dtype=np.float32)
+        own_high = np.array([self.norm.pos_max_m, self.norm.pos_max_m, 1.0, 1.0, self.norm.r_max, self.norm.vel_max, self.norm.vel_max, self.norm.b_max, 1.0, 1.0, 1.0], dtype=np.float32)
         
         # Per-other bounds: [dx, dy, sin(bearing), cos(bearing), du_x, du_y]
         per_other_low = np.array([-self.norm.pos_max_m, -self.norm.pos_max_m, -1.0, -1.0, -self.norm.vel_max, -self.norm.vel_max], dtype=np.float32)
@@ -381,7 +384,7 @@ class MultiShipParallelEnv(ParallelEnv):
             - For ownship (agent 0): use velocity-based CPA (cpa_calculations_0speed) to handle active maneuvering
             - Uses current state (heading + speed) for velocity prediction -> more responsive to RL commands
             - For obstacles (agents 1+): use projection-based CPA (cpa_calculations) since they follow scripted trajectories
-            - Optional: AABB broad-phase filtering to reduce expensive CPA calculations (recommended for 5+ agents)
+            - Optional add: AABB broad-phase filtering to reduce expensive CPA calculations (5+ agents)
         """
 
         # Get pairs to check: either all pairs (naive) or filtered by AABB (optimized)
@@ -392,7 +395,7 @@ class MultiShipParallelEnv(ParallelEnv):
             # Naive: check all pairs
             pairs_to_check = [(a, b) for a in range(self.n_agents) for b in range(a + 1, self.n_agents)]
 
-        # Narrow-phase: compute CPA for all checked pairs
+        # Compute CPA for all checked pairs
         for a, b in pairs_to_check:
             xa, ya = float(self.X_all[a, 0]), float(self.X_all[a, 1])
             psi_a, u_a = float(self.X_all[a, 2]), float(self.X_all[a, 5])
@@ -451,36 +454,15 @@ class MultiShipParallelEnv(ParallelEnv):
 
     def _compute_reward_weights(self, case_num: int, n_obstacles: int) -> dict:
         """
-        Compute difficulty-aware reward weights.
-        Harder scenarios (4-ship) get stronger penalties/rewards for safety.
+        Weights of reward function terms for shaping on performance analysis 
         """
-        if n_obstacles == 1:  # 2-ship cases
-            return {
-                'progress': 200.0,        # Waypoint progress
-                'risk': -8.0,             # Risk penalty (continuous shaping)
-                'separation': 1.0,        # Safe separation bonus
-                'warning': -1.0,          # Warning zone penalty
-                'collision': -500.0,      # Collision penalty
-                'success': 250.0,         # Success bonus
-            }
-        elif n_obstacles == 2:  # 3-ship cases
-            return {
-                'progress': 200.0,
-                'risk': -12.0,            # Stronger risk penalty for 3-ship
-                'separation': 2.0,        # Increased separation bonus
-                'warning': -2.0,          # Stronger warning penalty
-                'collision': -600.0,      # Increased collision penalty
-                'success': 250.0,
-            }
-        else:  # 4-ship cases (n_obstacles >= 3)
-            return {
-                'progress': 200.0,
-                'risk': -20.0,            # Strong risk penalty for 4-ship (safety critical)
-                'separation': 3.0,        # Much stronger separation bonus
-                'warning': -3.0,          # Strong warning penalty
-                'collision': -750.0,      # Severe collision penalty for hardest cases
-                'success': 250.0,
-            }
+        return {
+            'progress': 200.0,       # delta-progress reward
+            'risk': -15.0,           # moderate risk penalty
+            'separation': 2.0,       # safe separation reward
+            'collision': -600.0,     # hard collision penalty 
+            'success': 250.0,        # waypoint completion reward 
+        }
 
     def reset_internal_state(self):
         """Reinitialize all internal state variables for a new episode"""
@@ -534,7 +516,10 @@ class MultiShipParallelEnv(ParallelEnv):
         # track which agents were truncated in previous step (for handling final observations)
         self.agent_previously_truncated = {agent: False for agent in self.agents}
         
-        # Initialize goal progress tracking for all agents (used in delta-progress reward)
+        # track which agents were terminated in previous step (for handling final observations)
+        self.agent_previously_terminated = {agent: False for agent in self.agents}
+        
+        # initialize goal progress tracking for all agents (used in delta-progress reward)
         self.prev_goal_progress_all = {agent: 0.0 for agent in self.agents}
 
         return observations, infos
@@ -561,8 +546,8 @@ class MultiShipParallelEnv(ParallelEnv):
             if agent not in actions:
                 continue
             
-            # CRITICAL: Only ownship (k=0) uses waypoint planning and RL actions
-            # Obstacles (k>0) propagate forward with FIXED initial heading (obstacle_sim style)
+            # Only ownship (k=0) uses waypoint planning and RL actions
+            # OBSTACLE vessels: (k>0) propagate forward with FIXED initial heading 
             # This ensures true straight-line collision courses for training
             if k == 0:
                 # OWNSHIP: Full waypoint planning + RL action (heading only)
@@ -596,8 +581,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 
                 psi_ref[k] = float(psi_wp + delta_heading)
             else:
-                # OBSTACLES: Use fixed initial heading (straight-line propagation)
-                # This creates deterministic collision courses without replanning
+                # OBSTACLE vessels: Use fixed initial heading (straight-line propagation)
                 psi_ref[k] = self.X_all[k, 2]  # Use current heading (maintain)
         
         # 2) advance dynamics for each ship (speed held constant)
@@ -635,7 +619,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 self.X_all[k, 1] += dy_m  # Y position
                 # psi (heading), r (rate), b (balance), u (speed) all remain unchanged
 
-        # 3) update reusable pairwise geometruy cache for the new state
+        # 3) update reusable pairwise geometruy cache for the new state (save time)
         self.update_pairwise_geometry_cache()
 
         # 4) rewards / dones
@@ -657,22 +641,27 @@ class MultiShipParallelEnv(ParallelEnv):
             for agent in self.agents:
                 infos[agent]["episode_metrics"] = dict(self.episode_metrics[agent])
 
-        # IMPORTANT: Handle observations for new API stack RLlib
-        # RLlib needs ONE final observation for agents being truncated (for value function bootstrapping)
-        # but NOT observations for agents already truncated in previous steps
+        # Handle observations for new API stack RLlib
+        # RLlib needs ONE final observation for agents being terminated/truncated (for value function bootstrapping)
+        # but NOT observations for agents already terminated/truncated in previous steps
         observations = {}
         for k, agent in enumerate(self.agents):
+            is_terminated_this_step = terminations[agent] and not self.agent_previously_terminated[agent]
             is_truncated_this_step = truncations[agent] and not self.agent_previously_truncated[agent]
             is_not_done = not (truncations[agent] or terminations[agent])
-            # Return obs for: agents that are active OR agents being truncated this step
-            if is_not_done or is_truncated_this_step:
+            # Return obs for: agents that are active OR agents being terminated/truncated this step
+            if is_not_done or is_terminated_this_step or is_truncated_this_step:
                 observations[agent] = self.get_observation(k)
         
-        # Filter rewards to match observations (only active agents + newly truncated)
-        rewards = {
-            agent: r for agent, r in rewards.items() 
-            if not (truncations[agent] or terminations[agent]) or (truncations[agent] and not self.agent_previously_truncated[agent])
-        }
+        # Filter rewards to match observations (only active agents + newly terminated/truncated)
+        rewards_filtered = {}
+        for agent, r in rewards.items():
+            is_terminated_this_step = terminations[agent] and not self.agent_previously_terminated[agent]
+            is_truncated_this_step = truncations[agent] and not self.agent_previously_truncated[agent]
+            is_not_done = not (truncations[agent] or terminations[agent])
+            if is_not_done or is_terminated_this_step or is_truncated_this_step:
+                rewards_filtered[agent] = r
+        rewards = rewards_filtered
         
         # Filter infos to match observations (RLlib expects alignment)
         infos = {
@@ -683,6 +672,8 @@ class MultiShipParallelEnv(ParallelEnv):
         for agent in self.agents:
             if truncations[agent]:
                 self.agent_previously_truncated[agent] = True
+            if terminations[agent]:
+                self.agent_previously_terminated[agent] = True
 
         return observations, rewards, terminations, truncations, infos
 
@@ -695,6 +686,9 @@ class MultiShipParallelEnv(ParallelEnv):
         return (angle + np.pi) % (2 * np.pi) - np.pi
     
     def own_state_features(self, k: int) -> np.ndarray:
+        """
+        Handles normalization of own state features contributing to normalized observation space (necessary for learning stability)
+        """
         x_m, y_m, psi, r, b, u = self.X_all[k, :]
         
         # Decompose surge speed into x and y velocity components
@@ -725,23 +719,41 @@ class MultiShipParallelEnv(ParallelEnv):
     
     def get_observation(self, k: int) -> np.ndarray:
         """
-        Get observation for agent k with FIXED SIZE always (8 own + 18 for max 3 obstacles = 26 dims).
+        Get observation for agent k of FIXED SIZE (11 own + 18 for max 3 obstacles = 29 dims).
         
         This ensures consistent observation size regardless of actual obstacle count.
         Unused obstacle slots are zero-filled but maintain consistent positions.
         
-        Structure (always 26 dims):
+        Structure (always 29 dims):
         - Dims 0-7: own state (x, y, sin(psi), cos(psi), r, u_x, u_y, b) - normalized
-        - Dims 8-13: obstacle 0 (dx, dy, sin(bearing), cos(bearing), du_x, du_y) - normalized
-        - Dims 14-19: obstacle 1 (6 dims) - zero-padded if not present
-        - Dims 20-25: obstacle 2 (6 dims) - zero-padded if not present
+        - Dims 8-10: goal information (sin(goal_bearing), cos(goal_bearing), goal_distance_norm) - normalized
+        - Dims 11-16: obstacle 0 (dx, dy, sin(bearing), cos(bearing), du_x, du_y) - normalized
+        - Dims 17-22: obstacle 1 (6 dims) - zero-padded if not present
+        - Dims 23-28: obstacle 2 (6 dims) - zero-padded if not present
         """
-        own = self.own_state_features(k)
+        own = self.own_state_features(k)  # 8 dims
         xk_m, yk_m, psik, uk = self.X_all[k, 0], self.X_all[k, 1], self.X_all[k, 2], self.X_all[k, 5]
         
         # Own surge speed components
         uk_x = uk * np.cos(psik)
         uk_y = uk * np.sin(psik)
+        
+        # GOAL BEARING AND DISTANCE (3 dims)
+        # Calculate bearing from ownship to final goal waypoint
+        xg_m = float(self.Xwpt_all[k][-1]) * NMI
+        yg_m = float(self.Ywpt_all[k][-1]) * NMI
+        goal_dx_m = xg_m - xk_m
+        goal_dy_m = yg_m - yk_m
+        goal_bearing = float(np.arctan2(goal_dy_m, goal_dx_m))
+        goal_bearing_rel = self._wrap_angle(goal_bearing - psik)
+        sin_goal_b = np.sin(goal_bearing_rel)
+        cos_goal_b = np.cos(goal_bearing_rel)
+        
+        # Goal distance (normalized)
+        goal_dist_m = float(np.hypot(goal_dx_m, goal_dy_m))
+        goal_dist_norm = np.clip(goal_dist_m / self.norm.pos_max_m, -1.0, 1.0)
+        
+        goal_features = np.array([sin_goal_b, cos_goal_b, goal_dist_norm], dtype=np.float32)
 
         # Collect ALL obstacles (up to 3), zero-padding unused slots
         per_other = []
@@ -793,11 +805,11 @@ class MultiShipParallelEnv(ParallelEnv):
             per_other.append(np.zeros(6, dtype=np.float32))
             obstacle_idx += 1
         
-        # Concatenate: own (8 dims) + obstacles (18 dims) = 26 dims ALWAYS
-        obs = np.concatenate([own] + per_other, axis=0).astype(np.float32)
+        # Concatenate: own (8 dims) + goal (3 dims) + obstacles (18 dims) = 29 dims
+        obs = np.concatenate([own, goal_features] + per_other, axis=0).astype(np.float32)
         
-        # Ensure exactly 26 dims
-        assert len(obs) == 26, f"Observation size mismatch: expected 26, got {len(obs)}"
+        # Ensure exactly 29 dims
+        assert len(obs) == 29, f"Observation size mismatch: expected 29, got {len(obs)}"
 
         # Safety: if NaNs appear, replace with zero (shouldn't happen with continuous features)
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
@@ -873,6 +885,9 @@ class MultiShipParallelEnv(ParallelEnv):
 
             # Check if agent already reached goal - if so, skip metrics collection for this agent
             agent_already_done = self.agent_reached_goal[agent]
+            
+            # DEBUG: Track if agent is already done
+            infos[agent]["debug_agent_already_done"] = agent_already_done
 
             # === REWARD FUNCTION ===
             # 5 terms: waypoint progress + risk penalty + near-miss penalty + collision penalty + success bonus
@@ -889,7 +904,6 @@ class MultiShipParallelEnv(ParallelEnv):
                 step_dist = float(np.hypot(dx_step, dy_step))
                 self.episode_metrics[agent]["path_length_m"] += step_dist
                 
-                # ========== OPTION 1: Delta Progress Reward (Waypoint-Based) ==========
                 # Reward based on progress towards goal (route completion), not just displacement
                 progress_m, route_len_m, _ = self.route_progress(k)
                 goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
@@ -908,16 +922,18 @@ class MultiShipParallelEnv(ParallelEnv):
 
             total += r_along
 
-            # Risk penalty: continuous penalty for high-risk configurations
-            # Especially important for harder 4-ship cases to prevent collisions
+            # Risk penalty: continuous penalty for high-risk vessel configurations 
             agent_risks = pair_risk[k].copy()
             agent_risks[k] = 0.0 
             max_risk = float(np.max(agent_risks))
             infos[agent]["max_risk"] = max_risk
             
             w_risk = self.reward_weights['risk']
+            risk_penalty = 0.0
             if w_risk < 0:  # Apply risk penalty if configured for this difficulty
-                total += w_risk * max_risk
+                risk_penalty = w_risk * max_risk
+                total += risk_penalty
+            infos[agent]["risk_penalty"] = risk_penalty  # For evaluation diagnostics
         
             # only update metrics if agent hasn't reached goal yet
             if not agent_already_done:
@@ -962,70 +978,94 @@ class MultiShipParallelEnv(ParallelEnv):
 
             # Collision penalty: large negative reward for actual collision
             # Difficulty-aware: harder cases (4-ship) get more severe penalties
+            # Check if collision first: hard blocker for success
             finite_d = np.isfinite(pair_dist[k])
             min_dist = float(np.min(pair_dist[k][finite_d])) if np.any(finite_d) else np.inf
             collision = (min_dist < LOA)
 
             w_collision = self.reward_weights['collision']
 
+            # If collision, agent fails immediately - no success possible
             if collision:
                 if self.episode_metrics[agent]["collision"] == 0:
                     self.episode_metrics[agent]["collision"] = 1
+                    # Per-agent termination: collision ends THIS agent's episode immediately
+                    # (Other agents continue in multi-agent scenarios)
+                    terminations[agent] = True
+                    if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
+                        self.episode_metrics[agent]["completion_time_s"] = self.t
+                    # Mark agent as done so we stop collecting metrics
+                    self.agent_reached_goal[agent] = True
+                
+                infos[agent]["success"] = False  # Collision = automatic failure
                 total += w_collision
-            
-
-            # Success: reached final wp and within radius 
-            #dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
-            progress_m, route_len_m, _ = self.route_progress(k)
-            goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
-            
-            # update goal progress only if agent hasn't reached goal yet
-            if not agent_already_done:
-                self.episode_metrics[agent]["goal_progress"] = max(self.episode_metrics[agent]["goal_progress"], goal_progress)
-            
-            # success if: reached final waypoint using waypoint_selection() built-in threshold (~200m from CORALL planning.py)
-            final_waypoint_reached_by_index = (i_wpt_k >= len(Xwpt_k) - 1)
-            
-            if final_waypoint_reached_by_index and len(Xwpt_k) > 1:
-                # Verify agent is actually close to the final waypoint
+            else:
+                # No collision: now check if agent reached goal
+                # Success: reached final wp and within radius 
+                #dist_to_wp = float(np.hypot(wx_m - x_k, wy_m - y_k))
+                progress_m, route_len_m, _ = self.route_progress(k)
+                goal_progress = float(np.clip(progress_m / max(route_len_m, 1.0), 0.0, 1.0))
+                
+                # update goal progress only if agent hasn't reached goal yet
+                if not agent_already_done:
+                    self.episode_metrics[agent]["goal_progress"] = max(self.episode_metrics[agent]["goal_progress"], goal_progress)
+                
+                # success if: reached final waypoint using waypoint_selection() built-in threshold (~200m from CORALL planning.py)
+                final_waypoint_reached_by_index = (i_wpt_k >= len(Xwpt_k) - 1)
+                
+                # DEBUG: Log waypoint indices and distances
+                infos[agent]["debug_i_wpt_k"] = i_wpt_k
+                infos[agent]["debug_max_wpt_idx"] = len(Xwpt_k) - 1
+                infos[agent]["debug_len_Xwpt"] = len(Xwpt_k)
+                infos[agent]["debug_final_wpt_idx_check"] = final_waypoint_reached_by_index
+                
+                # Calculate distance to final goal (always, not just when at final waypoint)
                 xf_nmi = float(Xwpt_k[-1])
                 yf_nmi = float(Ywpt_k[-1])
                 dist_to_goal_nmi = np.hypot(xf_nmi - x_nmi, yf_nmi - y_nmi)
-                final_reached = (dist_to_goal_nmi < 200.0 / 1852.0)  # ~200m acceptance radius (from CORALL)
-            else:
-                final_reached = final_waypoint_reached_by_index
-
-            w_success = self.reward_weights['success']
-
-            # OPTION 2: Only grant success bonus if NO collision occurred during entire episode
-            # This ensures agent learns to prioritize avoidance over reaching goal
-            if final_reached:
-                # Check if any collision occurred during this episode
-                episode_had_collision = (self.episode_metrics[agent]["collision"] == 1)
+                dist_to_goal_m = dist_to_goal_nmi * NMI
+                threshold_nmi = 200.0 / 1852.0  # ~200m acceptance radius
                 
-                if not episode_had_collision:
-                    # Success! Reached goal safely without collision
+                # Check if agent is close to FINAL goal, regardless of waypoint index
+                close_to_goal = (dist_to_goal_nmi < threshold_nmi)
+                
+                if final_waypoint_reached_by_index and len(Xwpt_k) > 1:
+                    final_reached = close_to_goal  # At final waypoint AND close enough
+                    infos[agent]["debug_path"] = "BOTH_CHECKS"
+                else:
+                    # Agent not at final waypoint yet, but if close enough to FINAL goal, still succeed
+                    final_reached = close_to_goal  # CHANGE: Success if close to final goal, even if waypoint not advanced
+                    infos[agent]["debug_path"] = "CLOSE_TO_GOAL" if close_to_goal else "FAR_FROM_GOAL"
+                
+                infos[agent]["debug_dist_to_goal_m"] = dist_to_goal_m
+                infos[agent]["debug_dist_to_goal_nmi"] = dist_to_goal_nmi
+                infos[agent]["debug_threshold_nmi"] = threshold_nmi
+                infos[agent]["debug_final_reached"] = final_reached
+                infos[agent]["debug_i_wpt_k"] = i_wpt_k
+                infos[agent]["debug_max_wpt_idx"] = len(Xwpt_k) - 1
+                infos[agent]["debug_len_Xwpt"] = len(Xwpt_k)
+                infos[agent]["debug_final_wpt_idx_check"] = final_waypoint_reached_by_index
+
+                w_success = self.reward_weights['success']
+
+                # Success: reached final waypoint safely (no collision, within radius)
+                if final_reached:
+                    # Agent reached goal safely - grant success reward
                     infos[agent]["success"] = True
-                    total += w_success  # Reward agents for reaching destination safely
+                    total += w_success  # Reward agents for reaching destination
                     self.episode_metrics[agent]["success"] = 1
                     self.episode_metrics[agent]["goal_passed"] = 1
-                else:
-                    # Reached goal but had collision(s) - no success bonus
-                    infos[agent]["success"] = False
-                    self.episode_metrics[agent]["goal_passed"] = 1  # Mark passed but not truly successful
-                
-                # Mark agent as reached goal - stop collecting metrics for this agent
-                self.agent_reached_goal[agent] = True
+                    
+                    # Mark agent as reached goal - stop collecting metrics for this agent
+                    self.agent_reached_goal[agent] = True
 
-                if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
-                    self.episode_metrics[agent]["completion_time_s"] = self.t
-                
-                # Mark agent as truncated (agent-level done) when reaching goal
-                # Note: Use truncations, NOT terminations - terminations end the global episode for all agents
-                # which breaks RLlib's trajectory handling in multi-agent environments
-                truncations[agent] = True
-            else:
-                infos[agent]["success"] = False
+                    if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
+                        self.episode_metrics[agent]["completion_time_s"] = self.t
+                    
+                    # Mark agent as truncated (agent-level done) when reaching goal
+                    truncations[agent] = True
+                else:
+                    infos[agent]["success"] = False
             
             # Track collision metrics (for analysis, not reward shaping)
             finite_d = np.isfinite(pair_dist[k])

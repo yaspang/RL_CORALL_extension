@@ -2,17 +2,17 @@
 Evaluate a trained GENERALIZED PPO policy (Stable-Baselines3).
 
 This script evaluates a policy trained with train_generalized_policy_sb3.py,
-which uses RandomCaseEnv to handle 26-dim observations across all cases (1, 6, 21).
+which uses RandomCaseEnv to handle 29-dim observations across all cases (1, 6, 21).
 
 GENERALIZED POLICY CHARACTERISTICS:
 ===================================
-- Observation size: 26-dim (Case 23 max, padded across all cases)
-- Trained on all cases: 1-23 with full curriculum from loose to tight encounters
-- Single checkpoint that generalizes across all 23 case variants
+- Observation size: 29-dim (v8: 8 own + 3 goal bearing/distance + 18 obstacles, padded across all cases)
+- Trained on all cases: 1-22 with full curriculum from loose to tight encounters
+- Single checkpoint that generalizes across all 22 case variants
 
 EVALUATION CAPABILITIES:
 ========================
-- Evaluate on **any CORALL case (1-23)** with the generalized checkpoint
+- Evaluate on **any CORALL case (1-22)** with the generalized checkpoint
 - Policy trained on all 23 cases, from loose (scale=1.0) to tight encounters
 - Metrics: collision rate, success rate, path length, DCPA, TCPA, risk
 - Episode history capture compatible with batch_animate_eval.py
@@ -76,7 +76,7 @@ CASE_OBS_SIZES = {
     6: 8 + 2*6,   # 2 obstacles
     21: 8 + 3*6,  # 3 obstacles
 }
-MAX_OBS_SIZE = 26  # Maximum (Case 21)
+MAX_OBS_SIZE = 29  # v8: 8 (own) + 3 (goal bearing/distance) + 18 (3 obstacles × 6)
 
 
 def parse_args():

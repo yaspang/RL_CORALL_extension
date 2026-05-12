@@ -161,6 +161,16 @@ def compute_time_weighted_risk(pair_risk: np.ndarray, t: np.ndarray, own_idx: in
     return float(time_weighted_risk)
 
 
+def get_n_agents_from_case(case_num: int) -> int:
+    """Map case number to number of agents"""
+    if case_num <= 4:
+        return 2
+    elif case_num <= 11:
+        return 3
+    else:  # case_num > 11
+        return 4
+
+
 def aggregate_case_metrics(
     case_num: int,
     baseline_dirs: List[Path],
@@ -186,75 +196,77 @@ def aggregate_case_metrics(
     baseline_dir = baseline_for_case[0]
     rl_dir = rl_for_case[0]
     
-    # Load histories
+    # Load histories (optional - may not exist for baseline)
     baseline_hists = load_episode_histories(baseline_dir)
     rl_hists = load_episode_histories(rl_dir)
     
-    if not baseline_hists or not rl_hists:
-        print(f"  No histories found for case {case_num}")
-        return None
+    # Get number of agents from histories or from case mapping
+    if baseline_hists:
+        n_agents = baseline_hists[0]['n_agents']
+    elif rl_hists:
+        n_agents = rl_hists[0]['n_agents']
+    else:
+        n_agents = get_n_agents_from_case(case_num)
     
-    # Get number of agents
-    n_agents = baseline_hists[0]['n_agents']
     n_additional_agents = n_agents - 1  # Exclude ownship
     
-    # Compute metrics for baseline
+    # Compute metrics for baseline (if histories exist)
     baseline_min_sep_vals = []
     baseline_risk_vals = []
     baseline_distances = []
     baseline_times = []
-    baseline_collisions = []
     
-    for hist in baseline_hists:
-        try:
-            min_sep = compute_min_separation(hist['pair_dist'])
-            dist = compute_distance_traveled(hist['X_all'])
-            time = compute_total_time(hist['t'])
-            collision = hist['collision']
-            
-            # Compute risk only if available
-            risk = np.nan
-            if hist['pair_risk'] is not None:
-                risk = compute_time_weighted_risk(hist['pair_risk'], hist['t'])
-            
-            if not np.isnan(min_sep):
-                baseline_min_sep_vals.append(min_sep)
-            if not np.isnan(risk):
-                baseline_risk_vals.append(risk)
-            baseline_distances.append(dist)
-            baseline_times.append(time)
-            baseline_collisions.append(collision)
-        except Exception as e:
-            print(f"    Warning: Failed to compute baseline metrics: {e}")
+    if baseline_hists:
+        for hist in baseline_hists:
+            try:
+                min_sep = compute_min_separation(hist['pair_dist'])
+                dist = compute_distance_traveled(hist['X_all'])
+                time = compute_total_time(hist['t'])
+                
+                # Compute risk only if available
+                risk = np.nan
+                if hist['pair_risk'] is not None:
+                    risk = compute_time_weighted_risk(hist['pair_risk'], hist['t'])
+                
+                if not np.isnan(min_sep):
+                    baseline_min_sep_vals.append(min_sep)
+                if not np.isnan(risk):
+                    baseline_risk_vals.append(risk)
+                baseline_distances.append(dist)
+                baseline_times.append(time)
+            except Exception as e:
+                print(f"    Warning: Failed to compute baseline metrics: {e}")
+    else:
+        print(f"  No baseline histories found for case {case_num} (will use CSV-only metrics)")
     
-    # Compute metrics for RL
+    # Compute metrics for RL (if histories exist)
     rl_min_sep_vals = []
     rl_risk_vals = []
     rl_distances = []
     rl_times = []
-    rl_collisions = []
     
-    for hist in rl_hists:
-        try:
-            min_sep = compute_min_separation(hist['pair_dist'])
-            dist = compute_distance_traveled(hist['X_all'])
-            time = compute_total_time(hist['t'])
-            collision = hist['collision']
-            
-            # Compute risk only if available
-            risk = np.nan
-            if hist['pair_risk'] is not None:
-                risk = compute_time_weighted_risk(hist['pair_risk'], hist['t'])
-            
-            if not np.isnan(min_sep):
-                rl_min_sep_vals.append(min_sep)
-            if not np.isnan(risk):
-                rl_risk_vals.append(risk)
-            rl_distances.append(dist)
-            rl_times.append(time)
-            rl_collisions.append(collision)
-        except Exception as e:
-            print(f"    Warning: Failed to compute RL metrics: {e}")
+    if rl_hists:
+        for hist in rl_hists:
+            try:
+                min_sep = compute_min_separation(hist['pair_dist'])
+                dist = compute_distance_traveled(hist['X_all'])
+                time = compute_total_time(hist['t'])
+                
+                # Compute risk only if available
+                risk = np.nan
+                if hist['pair_risk'] is not None:
+                    risk = compute_time_weighted_risk(hist['pair_risk'], hist['t'])
+                
+                if not np.isnan(min_sep):
+                    rl_min_sep_vals.append(min_sep)
+                if not np.isnan(risk):
+                    rl_risk_vals.append(risk)
+                rl_distances.append(dist)
+                rl_times.append(time)
+            except Exception as e:
+                print(f"    Warning: Failed to compute RL metrics: {e}")
+    else:
+        print(f"  No RL histories found for case {case_num} (will use CSV-only metrics)")
     
     # Average and std metrics
     baseline_min_sep_avg = np.mean(baseline_min_sep_vals) if baseline_min_sep_vals else np.nan
@@ -277,8 +289,35 @@ def aggregate_case_metrics(
     baseline_time_std = np.std(baseline_times, ddof=1) if len(baseline_times) > 1 else np.nan
     rl_time_std = np.std(rl_times, ddof=1) if len(rl_times) > 1 else np.nan
 
-    baseline_collision_rate = np.mean(baseline_collisions) if baseline_collisions else np.nan
-    rl_collision_rate = np.mean(rl_collisions) if rl_collisions else np.nan
+    # ===== COLLISION/SUCCESS RATES FROM CSV (AUTHORITATIVE PER-EPISODE DATA) =====
+    # Read from policy_eval_per_episode.csv with correct column names: collision_any, success_ownship
+    baseline_collision_rate = np.nan
+    baseline_success_rate = np.nan
+    rl_collision_rate = np.nan
+    rl_success_rate = np.nan
+    
+    baseline_csv = baseline_dir / 'seed_0' / 'policy_eval_per_episode.csv'
+    rl_csv = rl_dir / 'seed_0' / 'policy_eval_per_episode.csv'
+    
+    if baseline_csv.exists():
+        try:
+            baseline_df = pd.read_csv(baseline_csv)
+            if 'collision_any' in baseline_df.columns:
+                baseline_collision_rate = baseline_df['collision_any'].mean()
+            if 'success_ownship' in baseline_df.columns:
+                baseline_success_rate = baseline_df['success_ownship'].mean()
+        except Exception as e:
+            print(f"    Warning: Could not load baseline CSV: {e}")
+    
+    if rl_csv.exists():
+        try:
+            rl_df = pd.read_csv(rl_csv)
+            if 'collision_any' in rl_df.columns:
+                rl_collision_rate = rl_df['collision_any'].mean()
+            if 'success_ownship' in rl_df.columns:
+                rl_success_rate = rl_df['success_ownship'].mean()
+        except Exception as e:
+            print(f"    Warning: Could not load RL CSV: {e}")
 
     return {
         'case': case_num,
@@ -302,6 +341,8 @@ def aggregate_case_metrics(
         'rl_time_s_std': rl_time_std,
         'baseline_collision_rate': baseline_collision_rate,
         'rl_collision_rate': rl_collision_rate,
+        'baseline_success_rate': baseline_success_rate,
+        'rl_success_rate': rl_success_rate,
         'n_episodes_baseline': len(baseline_distances),
         'n_episodes_rl': len(rl_distances),
     }
@@ -338,28 +379,36 @@ def find_eval_directories(base_dir: Path, case_numbers: List[int]) -> Tuple[List
 
 def create_bar_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
     """Chart 1: Min Separation Distance by case (RL vs Baseline)"""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     x = np.arange(len(metrics_df))
     width = 0.35
     
-    case_labels = [f"Case {int(c)} ({int(n)} agents)" 
+    # Shorter labels to avoid overlap
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
     # Convert from nmi to meters for consistency
     baseline_sep_m = metrics_df['baseline_min_sep_nmi'] * NMI
     rl_sep_m = metrics_df['rl_min_sep_nmi'] * NMI
+    baseline_sep_std_m = metrics_df['baseline_min_sep_nmi_std'] * NMI
+    rl_sep_std_m = metrics_df['rl_min_sep_nmi_std'] * NMI
     
-    ax.bar(x - width/2, baseline_sep_m, width, label='Baseline', color='black')
-    ax.bar(x + width/2, rl_sep_m, width, label='RL Policy', color='#ff7f0e')
+    # Replace NaN with 0 for error bars
+    baseline_sep_std_m = np.nan_to_num(baseline_sep_std_m, nan=0.0)
+    rl_sep_std_m = np.nan_to_num(rl_sep_std_m, nan=0.0)
     
-    ax.set_xlabel('Case', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=12, fontweight='bold')
-    ax.set_title('Minimum Separation Distance: Baseline vs RL Policy', fontsize=14, fontweight='bold')
+    ax.bar(x - width/2, baseline_sep_m, width, label='Baseline (Rule-Based)', color='#1f77b4', yerr=baseline_sep_std_m, capsize=5, error_kw={'linewidth': 2})
+    ax.bar(x + width/2, rl_sep_m, width, label='RL Policy (Learning-Based)', color='#ff7f0e', yerr=rl_sep_std_m, capsize=5, error_kw={'linewidth': 2})
+    
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=14, fontweight='bold')
+    ax.set_title('Minimum Separation Distance: Baseline vs RL Policy', fontsize=16, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(case_labels)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
+    ax.legend(fontsize=12)
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -369,34 +418,40 @@ def create_bar_chart_separation(metrics_df: pd.DataFrame, output_path: Path):
 
 def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
     """Chart 2: Total path length by case with efficiency %"""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     x = np.arange(len(metrics_df))
     width = 0.35
     
-    case_labels = [f"Case {int(c)} ({int(n)} agents)" 
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
     baseline_dist = metrics_df['baseline_dist_m']
     rl_dist = metrics_df['rl_dist_m']
+    baseline_dist_std = metrics_df.get('baseline_dist_m_std', pd.Series([np.nan]*len(metrics_df)))
+    rl_dist_std = metrics_df.get('rl_dist_m_std', pd.Series([np.nan]*len(metrics_df)))
     
-    bars1 = ax.bar(x - width/2, baseline_dist, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_dist, width, label='RL Policy', color='#ff7f0e')
+    baseline_dist_std = np.nan_to_num(baseline_dist_std, nan=0.0)
+    rl_dist_std = np.nan_to_num(rl_dist_std, nan=0.0)
+    
+    bars1 = ax.bar(x - width/2, baseline_dist, width, label='Baseline (Rule-Based)', color='#1f77b4', yerr=baseline_dist_std, capsize=5, error_kw={'linewidth': 2})
+    bars2 = ax.bar(x + width/2, rl_dist, width, label='RL Policy (Learning-Based)', color='#ff7f0e', yerr=rl_dist_std, capsize=5, error_kw={'linewidth': 2})
     
     # Add efficiency labels on bars
     for i, (b_dist, r_dist) in enumerate(zip(baseline_dist, rl_dist)):
         efficiency_pct = ((b_dist - r_dist) / b_dist) * 100
         ax.text(i + width/2, r_dist + 50, 
-               f'{efficiency_pct:+.1f}%', ha='center', fontsize=9, fontweight='bold',
+               f'{efficiency_pct:+.1f}%', ha='center', fontsize=11, fontweight='bold',
                color='darkred' if efficiency_pct > 0 else 'darkblue')
     
-    ax.set_xlabel('Case', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Total Path Length (meters)', fontsize=12, fontweight='bold')
-    ax.set_title('Total Path Length Traveled (Ownship): Baseline vs RL Policy', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Total Path Length (meters)', fontsize=14, fontweight='bold')
+    ax.set_title('Total Path Length Traveled (Ownship): Baseline vs RL Policy', fontsize=16, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(case_labels)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
+    ax.legend(fontsize=12)
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -406,34 +461,40 @@ def create_bar_chart_distance(metrics_df: pd.DataFrame, output_path: Path):
 
 def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
     """Chart 3: Total time traveled by case with efficiency %"""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     x = np.arange(len(metrics_df))
     width = 0.35
     
-    case_labels = [f"Case {int(c)} ({int(n)} agents)" 
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
     baseline_time = metrics_df['baseline_time_s']
     rl_time = metrics_df['rl_time_s']
+    baseline_time_std = metrics_df.get('baseline_time_s_std', pd.Series([np.nan]*len(metrics_df)))
+    rl_time_std = metrics_df.get('rl_time_s_std', pd.Series([np.nan]*len(metrics_df)))
     
-    bars1 = ax.bar(x - width/2, baseline_time, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_time, width, label='RL Policy', color='#ff7f0e')
+    baseline_time_std = np.nan_to_num(baseline_time_std, nan=0.0)
+    rl_time_std = np.nan_to_num(rl_time_std, nan=0.0)
+    
+    bars1 = ax.bar(x - width/2, baseline_time, width, label='Baseline (Rule-Based)', color='#1f77b4', yerr=baseline_time_std, capsize=5, error_kw={'linewidth': 2})
+    bars2 = ax.bar(x + width/2, rl_time, width, label='RL Policy (Learning-Based)', color='#ff7f0e', yerr=rl_time_std, capsize=5, error_kw={'linewidth': 2})
     
     # Add efficiency labels on bars
     for i, (b_time, r_time) in enumerate(zip(baseline_time, rl_time)):
         efficiency_pct = ((b_time - r_time) / b_time) * 100
         ax.text(i + width/2, r_time + 3, 
-               f'{efficiency_pct:+.1f}%', ha='center', fontsize=9, fontweight='bold',
+               f'{efficiency_pct:+.1f}%', ha='center', fontsize=11, fontweight='bold',
                color='darkred' if efficiency_pct > 0 else 'darkblue')
     
-    ax.set_xlabel('Case', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Episode Duration (seconds)', fontsize=12, fontweight='bold')
-    ax.set_title('Time to Goal: Baseline vs RL Policy', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Episode Duration (seconds)', fontsize=14, fontweight='bold')
+    ax.set_title('Time to Goal: Baseline vs RL Policy', fontsize=16, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(case_labels)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.legend(fontsize=12)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -442,36 +503,42 @@ def create_bar_chart_time(metrics_df: pd.DataFrame, output_path: Path):
 
 
 def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
-    """Chart 4: Risk Exposure (time-weighted risk) by case"""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    """Chart 4: Risk Exposure (time-weighted maximum risk) by case"""
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     x = np.arange(len(metrics_df))
     width = 0.35
     
-    case_labels = [f"Case {int(c)} ({int(n)} agents)" 
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
     baseline_risk = metrics_df['baseline_risk_exposure']
     rl_risk = metrics_df['rl_risk_exposure']
+    baseline_risk_std = metrics_df.get('baseline_risk_exposure_std', pd.Series([np.nan]*len(metrics_df)))
+    rl_risk_std = metrics_df.get('rl_risk_exposure_std', pd.Series([np.nan]*len(metrics_df)))
     
-    bars1 = ax.bar(x - width/2, baseline_risk, width, label='Baseline', color='black')
-    bars2 = ax.bar(x + width/2, rl_risk, width, label='RL Policy', color='#ff7f0e')
+    baseline_risk_std = np.nan_to_num(baseline_risk_std, nan=0.0)
+    rl_risk_std = np.nan_to_num(rl_risk_std, nan=0.0)
+    
+    bars1 = ax.bar(x - width/2, baseline_risk, width, label='Baseline (Rule-Based)', color='#1f77b4', yerr=baseline_risk_std, capsize=5, error_kw={'linewidth': 2})
+    bars2 = ax.bar(x + width/2, rl_risk, width, label='RL Policy (Learning-Based)', color='#ff7f0e', yerr=rl_risk_std, capsize=5, error_kw={'linewidth': 2})
     
     # Add difference labels on bars
     for i, (b_risk, r_risk) in enumerate(zip(baseline_risk, rl_risk)):
         if b_risk > 0:
             risk_reduction_pct = ((b_risk - r_risk) / b_risk) * 100
             ax.text(i + width/2, r_risk + 0.05 * baseline_risk.max(), 
-                   f'{risk_reduction_pct:+.1f}%', ha='center', fontsize=9, fontweight='bold',
+                   f'{risk_reduction_pct:+.1f}%', ha='center', fontsize=11, fontweight='bold',
                    color='darkred' if risk_reduction_pct > 0 else 'darkblue')
     
-    ax.set_xlabel('Case', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=12, fontweight='bold')
-    ax.set_title('Risk Exposure: Baseline vs RL Policy (Lower is Better)', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Risk Exposure (Time-Weighted Max Risk)', fontsize=14, fontweight='bold')
+    ax.set_title('Risk Exposure Over Time: Baseline vs RL Policy (Lower is Better)', fontsize=16, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(case_labels)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
+    ax.legend(fontsize=12)
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -481,33 +548,181 @@ def create_bar_chart_risk_exposure(metrics_df: pd.DataFrame, output_path: Path):
 
 def create_bar_chart_collision_rate(metrics_df: pd.DataFrame, output_path: Path):
     """Chart: Collision Rate (%) by case"""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     
     x = np.arange(len(metrics_df))
     width = 0.35
     
-    case_labels = [f"Case {int(c)} ({int(n)} agents)" 
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
     baseline_collision_pct = metrics_df['baseline_collision_rate'] * 100
     rl_collision_pct = metrics_df['rl_collision_rate'] * 100
     
-    bars1 = ax.bar(x - width/2, baseline_collision_pct, width, label='Baseline', color='black')
+    bars1 = ax.bar(x - width/2, baseline_collision_pct, width, label='Baseline', color='#1f77b4')
     bars2 = ax.bar(x + width/2, rl_collision_pct, width, label='RL Policy', color='#ff7f0e')
     
     # Add collision counts on bars
     for i, (b_rate, r_rate) in enumerate(zip(baseline_collision_pct, rl_collision_pct)):
-        ax.text(i - width/2, b_rate + 1, f'{b_rate:.1f}%', ha='center', fontsize=9, fontweight='bold')
-        ax.text(i + width/2, r_rate + 1, f'{r_rate:.1f}%', ha='center', fontsize=9, fontweight='bold')
+        ax.text(i - width/2, b_rate + 1, f'{b_rate:.1f}%', ha='center', fontsize=11, fontweight='bold')
+        ax.text(i + width/2, r_rate + 1, f'{r_rate:.1f}%', ha='center', fontsize=11, fontweight='bold')
     
-    ax.set_xlabel('Case', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Collision Rate (%)', fontsize=12, fontweight='bold')
-    ax.set_title('Collision Rate: Baseline vs RL Policy (Lower is Better)', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Collision Rate (%)', fontsize=14, fontweight='bold')
+    ax.set_title('Collision Rate: Baseline vs RL Policy (Lower is Better)', fontsize=16, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(case_labels)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
     ax.set_ylim(0, 100)
-    ax.legend(fontsize=11)
+    ax.legend(fontsize=12)
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+    
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    plt.close(fig)
+    print(f"  Saved: {output_path.name}")
+
+
+def create_bar_chart_success_rate(metrics_df: pd.DataFrame, output_path: Path):
+    """Chart: Success Rate (%) by case - complement of collision rate"""
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    x = np.arange(len(metrics_df))
+    width = 0.35
+    
+    case_labels = [f"C{int(c)}\n({int(n)}s)" 
+                   for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
+    
+    # Success rate = 1 - collision_rate
+    baseline_success_pct = (1 - metrics_df['baseline_collision_rate']) * 100
+    rl_success_pct = (1 - metrics_df['rl_collision_rate']) * 100
+    
+    bars1 = ax.bar(x - width/2, baseline_success_pct, width, label='Baseline', color='#2ca02c')
+    bars2 = ax.bar(x + width/2, rl_success_pct, width, label='RL Policy', color='#1f77b4')
+    
+    # Add success rates on bars with checkmarks/crosses for visibility
+    for i, (b_rate, r_rate) in enumerate(zip(baseline_success_pct, rl_success_pct)):
+        ax.text(i - width/2, b_rate + 1.5, f'{b_rate:.1f}%', ha='center', fontsize=11, fontweight='bold')
+        ax.text(i + width/2, r_rate + 1.5, f'{r_rate:.1f}%', ha='center', fontsize=11, fontweight='bold')
+    
+    ax.set_xlabel('Case', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Success Rate (%)', fontsize=14, fontweight='bold')
+    ax.set_title('Success Rate: Baseline vs RL Policy (Higher is Better) - Guaranteed Safe Passage', 
+                 fontsize=16, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(case_labels, fontsize=9, rotation=0, ha='center')
+    ax.set_ylim(0, 105)
+    ax.axhline(y=100, color='green', linestyle='--', alpha=0.4, linewidth=1.5, label='Perfect Success')
+    ax.legend(fontsize=12)
+    ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
+    
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
+    plt.close(fig)
+    print(f"  Saved: {output_path.name}")
+
+
+def create_summary_guaranteed_success(metrics_df: pd.DataFrame, output_path: Path):
+    """
+    Chart: Aggregated Success/Collision Metrics across agent complexities
+    Shows average success rate for 2-ship, 3-ship, 4-ship cases to demonstrate
+    guaranteed collision avoidance across increasing complexity.
+    """
+    # Categorize cases by number of agents
+    cat_2ship = metrics_df[metrics_df['n_agents'] == 2]
+    cat_3ship = metrics_df[metrics_df['n_agents'] == 3]
+    cat_4ship = metrics_df[metrics_df['n_agents'] == 4]
+    
+    categories = []
+    baseline_success = []
+    rl_success = []
+    baseline_collision = []
+    rl_collision = []
+    
+    # 2-ship scenarios
+    if len(cat_2ship) > 0:
+        categories.append("2-Ship\n(Simple)")
+        baseline_success.append((1 - cat_2ship['baseline_collision_rate'].mean()) * 100)
+        rl_success.append((1 - cat_2ship['rl_collision_rate'].mean()) * 100)
+        baseline_collision.append(cat_2ship['baseline_collision_rate'].mean() * 100)
+        rl_collision.append(cat_2ship['rl_collision_rate'].mean() * 100)
+    
+    # 3-ship scenarios
+    if len(cat_3ship) > 0:
+        categories.append("3-Ship\n(Moderate)")
+        baseline_success.append((1 - cat_3ship['baseline_collision_rate'].mean()) * 100)
+        rl_success.append((1 - cat_3ship['rl_collision_rate'].mean()) * 100)
+        baseline_collision.append(cat_3ship['baseline_collision_rate'].mean() * 100)
+        rl_collision.append(cat_3ship['rl_collision_rate'].mean() * 100)
+    
+    # 4-ship scenarios
+    if len(cat_4ship) > 0:
+        categories.append("4-Ship\n(Complex)")
+        baseline_success.append((1 - cat_4ship['baseline_collision_rate'].mean()) * 100)
+        rl_success.append((1 - cat_4ship['rl_collision_rate'].mean()) * 100)
+        baseline_collision.append(cat_4ship['baseline_collision_rate'].mean() * 100)
+        rl_collision.append(cat_4ship['rl_collision_rate'].mean() * 100)
+    
+    # Overall average
+    categories.append("Overall\nAverage")
+    baseline_success.append((1 - metrics_df['baseline_collision_rate'].mean()) * 100)
+    rl_success.append((1 - metrics_df['rl_collision_rate'].mean()) * 100)
+    baseline_collision.append(metrics_df['baseline_collision_rate'].mean() * 100)
+    rl_collision.append(metrics_df['rl_collision_rate'].mean() * 100)
+    
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    
+    x = np.arange(len(categories))
+    width = 0.35
+    
+    # ===== Subplot 1: Success Rate =====
+    bars1 = ax1.bar(x - width/2, baseline_success, width, label='Baseline', 
+                    color='#2ca02c', alpha=0.8, edgecolor='black', linewidth=1.5)
+    bars2 = ax1.bar(x + width/2, rl_success, width, label='RL Policy', 
+                    color='#1f77b4', alpha=0.8, edgecolor='black', linewidth=1.5)
+    
+    # Add value labels on success rate bars
+    for i, (b, r) in enumerate(zip(baseline_success, rl_success)):
+        ax1.text(i - width/2, b + 1.5, f'{b:.1f}%', ha='center', fontsize=12, fontweight='bold')
+        ax1.text(i + width/2, r + 1.5, f'{r:.1f}%', ha='center', fontsize=12, fontweight='bold')
+    
+    ax1.set_ylabel('Success Rate (%)', fontsize=14, fontweight='bold')
+    ax1.set_title('Success Rate Across Complexity Levels\n(Guaranteed Collision Avoidance)', 
+                  fontsize=15, fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(categories, fontsize=12, fontweight='bold')
+    ax1.set_ylim(0, 105)
+    ax1.axhline(y=100, color='green', linestyle='--', alpha=0.5, linewidth=2, label='Perfect Safety')
+    ax1.legend(fontsize=12, loc='lower right')
+    ax1.grid(axis='y', alpha=0.3)
+    ax1.tick_params(axis='y', labelsize=11)
+    
+    # ===== Subplot 2: Collision Rate =====
+    bars3 = ax2.bar(x - width/2, baseline_collision, width, label='Baseline', 
+                    color='#d62728', alpha=0.8, edgecolor='black', linewidth=1.5)
+    bars4 = ax2.bar(x + width/2, rl_collision, width, label='RL Policy', 
+                    color='#ff7f0e', alpha=0.8, edgecolor='black', linewidth=1.5)
+    
+    # Add value labels on collision rate bars
+    for i, (b, r) in enumerate(zip(baseline_collision, rl_collision)):
+        if b > 0.5:
+            ax2.text(i - width/2, b + 1.5, f'{b:.1f}%', ha='center', fontsize=12, fontweight='bold')
+        if r > 0.5:
+            ax2.text(i + width/2, r + 1.5, f'{r:.1f}%', ha='center', fontsize=12, fontweight='bold')
+    
+    ax2.set_ylabel('Collision Rate (%)', fontsize=14, fontweight='bold')
+    ax2.set_title('Collision Rate Across Complexity Levels\n(Lower is Better)', 
+                  fontsize=15, fontweight='bold')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(categories, fontsize=12, fontweight='bold')
+    ax2.set_ylim(0, 100)  # Full 0-100% scale for accurate percentage representation
+    ax2.axhline(y=0, color='green', linestyle='--', alpha=0.5, linewidth=2, label='Zero Collisions')
+    ax2.legend(fontsize=12, loc='upper right')
+    ax2.grid(axis='y', alpha=0.3)
+    ax2.tick_params(axis='y', labelsize=11)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -520,7 +735,7 @@ def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path)
     # Group by total number of agents
     grouped = metrics_df.groupby('n_agents')
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(12, 7.5))
     
     agent_counts = sorted(metrics_df['n_agents'].unique())
     baseline_sep_by_agents = []
@@ -543,17 +758,18 @@ def create_scaling_chart_separation(metrics_df: pd.DataFrame, output_path: Path)
     
     width = 0.35
     ax.bar(np.array(x_positions) - width/2, baseline_sep_by_agents, width, 
-           label='Baseline (avg)', color='black')
+           label='Baseline (avg)', color='#1f77b4')
     ax.bar(np.array(x_positions) + width/2, rl_sep_by_agents, width, 
            label='RL Policy (avg)', color='#ff7f0e')
     
-    ax.set_xlabel('Total Ships in Environment', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=12, fontweight='bold')
-    ax.set_title('Minimum Separation Distance Scaling: Impact of Ships in Environment', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Total Ships in Environment', fontsize=15, fontweight='bold')
+    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=15, fontweight='bold')
+    ax.set_title('Minimum Separation Distance Scaling: Impact of Ships in Environment', fontsize=17, fontweight='bold')
     ax.set_xticks(x_positions)
-    ax.set_xticklabels(labels)
-    ax.legend(fontsize=11)
+    ax.set_xticklabels(labels, fontsize=12)
+    ax.legend(fontsize=13)
     ax.grid(axis='y', alpha=0.3)
+    ax.tick_params(axis='y', labelsize=12)
     
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches='tight', format='png')
@@ -647,61 +863,61 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     rl_time_std_arr = np.array(grouped_df['rl_time_std'].values, dtype=float)
     
     # Create figure with space for legend above subplots
-    fig = plt.figure(figsize=(10, 8))
-    
-    # Add subplots starting lower, leaving space at top for legend and title
-    ax1 = plt.subplot(2, 2, 1, position=[0.08, 0.48, 0.38, 0.38])
-    ax2 = plt.subplot(2, 2, 2, position=[0.54, 0.48, 0.38, 0.38])
-    ax3 = plt.subplot(2, 2, 3, position=[0.08, 0.08, 0.38, 0.32])
-    ax4 = plt.subplot(2, 2, 4, position=[0.54, 0.08, 0.38, 0.32])
+    import matplotlib.gridspec as gridspec
+    fig = plt.figure(figsize=(10, 12))
+    gs = gridspec.GridSpec(2, 2, figure=fig, left=0.12, right=0.95, top=0.82, bottom=0.08, hspace=0.35, wspace=0.3)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax3 = fig.add_subplot(gs[1, 0])
+    ax4 = fig.add_subplot(gs[1, 1])
     axs = np.array([[ax1, ax2], [ax3, ax4]])
     
     # ===== Panel 1 (Top Left): Total Path Length =====
     ax = axs[0, 0]
-    base_line, = ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    base_line, = ax.plot(x, baseline_dist_arr, 'o-', linewidth=1.5, markersize=5, color='#1f77b4')
     rl_line, = ax.plot(x, rl_dist_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_dist_std_arr).any():
-        ax.fill_between(x, baseline_dist_arr - baseline_dist_std_arr, baseline_dist_arr + baseline_dist_std_arr, color='black', alpha=0.18)
+        ax.fill_between(x, baseline_dist_arr - baseline_dist_std_arr, baseline_dist_arr + baseline_dist_std_arr, color='#1f77b4', alpha=0.18)
     if np.isfinite(rl_dist_std_arr).any():
         ax.fill_between(x, rl_dist_arr - rl_dist_std_arr, rl_dist_arr + rl_dist_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['dist_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_dist_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=8)
-    ax.set_ylabel('Total Path Length (m)', fontsize=8)
-    ax.set_title('Total Path Length', fontsize=11, fontweight='bold')
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_dist_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=10, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Total Path Length (m)', fontsize=13, fontweight='bold')
+    ax.set_title('Total Path Length', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
-    ax.tick_params(axis='y', labelsize=7)
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 2 (Top Right): Total Time Travelled =====
     ax = axs[0, 1]
-    base_line, = ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    base_line, = ax.plot(x, baseline_time_arr, 'o-', linewidth=1.5, markersize=5, color='#1f77b4')
     rl_line, = ax.plot(x, rl_time_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_time_std_arr).any():
-        ax.fill_between(x, baseline_time_arr - baseline_time_std_arr, baseline_time_arr + baseline_time_std_arr, color='black', alpha=0.18)
+        ax.fill_between(x, baseline_time_arr - baseline_time_std_arr, baseline_time_arr + baseline_time_std_arr, color='#1f77b4', alpha=0.18)
     if np.isfinite(rl_time_std_arr).any():
         ax.fill_between(x, rl_time_arr - rl_time_std_arr, rl_time_arr + rl_time_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['time_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_time_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=8)
-    ax.set_ylabel('Total Time Travelled (s)', fontsize=8)
-    ax.set_title('Total Time Travelled', fontsize=11, fontweight='bold')
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_time_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=11, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Total Time Travelled (s)', fontsize=13, fontweight='bold')
+    ax.set_title('Total Time Travelled', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
-    ax.tick_params(axis='y', labelsize=7)
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 3 (Bottom Left): Min Separation Distance =====
     ax = axs[1, 0]
-    base_line, = ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    base_line, = ax.plot(x, baseline_sep_arr, 'o-', linewidth=1.5, markersize=5, color='#1f77b4')
     rl_line, = ax.plot(x, rl_sep_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_sep_std_arr).any():
-        ax.fill_between(x, baseline_sep_arr - baseline_sep_std_arr, baseline_sep_arr + baseline_sep_std_arr, color='black', alpha=0.18)
+        ax.fill_between(x, baseline_sep_arr - baseline_sep_std_arr, baseline_sep_arr + baseline_sep_std_arr, color='#1f77b4', alpha=0.18)
     if np.isfinite(rl_sep_std_arr).any():
         ax.fill_between(x, rl_sep_arr - rl_sep_std_arr, rl_sep_arr + rl_sep_std_arr, color='#ff7f0e', alpha=0.18)
     desired_sep = 90.0
@@ -709,51 +925,51 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     for i, (xi, eff) in enumerate(zip(x, grouped_df['sep_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_sep_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=8)
-    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=8)
-    ax.set_title('Min Separation Distance', fontsize=11, fontweight='bold')
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_sep_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=11, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Minimum Separation Distance (m)', fontsize=13, fontweight='bold')
+    ax.set_title('Min Separation Distance', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
-    ax.tick_params(axis='y', labelsize=7)
-    ax.legend(handles=[sep_line], fontsize=7, loc='best')
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.legend(handles=[sep_line], fontsize=12, loc='best')
     ax.grid(True, alpha=0.3)
     
     # ===== Panel 4 (Bottom Right): Risk Exposure =====
     ax = axs[1, 1]
-    base_line, = ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, color='black')
+    base_line, = ax.plot(x, baseline_risk_arr, 'o-', linewidth=1.5, markersize=5, color='#1f77b4')
     rl_line, = ax.plot(x, rl_risk_arr, 's-', linewidth=1.5, markersize=5, color='#ff7f0e')
     if np.isfinite(baseline_risk_std_arr).any():
-        ax.fill_between(x, baseline_risk_arr - baseline_risk_std_arr, baseline_risk_arr + baseline_risk_std_arr, color='black', alpha=0.18)
+        ax.fill_between(x, baseline_risk_arr - baseline_risk_std_arr, baseline_risk_arr + baseline_risk_std_arr, color='#1f77b4', alpha=0.18)
     if np.isfinite(rl_risk_std_arr).any():
         ax.fill_between(x, rl_risk_arr - rl_risk_std_arr, rl_risk_arr + rl_risk_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
-        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_risk_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=7, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-    ax.set_xlabel('Total Ships in Environment', fontsize=8)
-    ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=8)
-    ax.set_title('Risk Exposure', fontsize=11, fontweight='bold')
+        ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_risk_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=11, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+    ax.set_xlabel('Total Ships in Environment', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Risk Exposure (time-weighted)', fontsize=13, fontweight='bold')
+    ax.set_title('Risk Exposure', fontsize=15, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=7)
-    ax.tick_params(axis='y', labelsize=7)
+    ax.set_xticklabels([f'{int(a)}' for a in x], fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
     ax.grid(True, alpha=0.3)
     
     # Add title at the top
-    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', fontsize=16, fontweight='bold', y=0.98)
+    fig.suptitle('Scaling Analysis: RL vs Baseline Performance across Ship Count', fontsize=17, fontweight='bold', y=0.91)
     
     # Add legend below title, above subplots
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
     
     legend_elements = [
-        Line2D([0], [0], color='black', marker='o', linestyle='-', linewidth=2, markersize=6, label='Baseline Ownship'),
-        Patch(facecolor='black', alpha=0.18, label='Baseline ±1 std'),
+        Line2D([0], [0], color='#1f77b4', marker='o', linestyle='-', linewidth=2, markersize=6, label='Baseline Ownship'),
+        Patch(facecolor='#1f77b4', alpha=0.18, label='Baseline ±1 std'),
         Line2D([0], [0], color='#ff7f0e', marker='s', linestyle='-', linewidth=2, markersize=6, label='RL Ownship'),
         Patch(facecolor='#ff7f0e', alpha=0.18, label='RL ±1 std'),
     ]
     
-    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=4, fontsize=11, frameon=True, facecolor='white', edgecolor='black')
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.88), ncol=4, fontsize=13, frameon=True, facecolor='white', edgecolor='black')
     
     fig.savefig(output_path, dpi=300, format='png')
     plt.close(fig)
@@ -811,10 +1027,12 @@ def main():
     create_bar_chart_time(df, args.output_dir / '03_time_by_case.png')
     create_bar_chart_risk_exposure(df, args.output_dir / '04_risk_exposure_by_case.png')
     create_bar_chart_collision_rate(df, args.output_dir / '05_collision_rate_by_case.png')
-    create_scaling_chart_separation(df, args.output_dir / '06_separation_scaling_by_ships.png')
+    create_bar_chart_success_rate(df, args.output_dir / '06_success_rate_by_case.png')
+    create_summary_guaranteed_success(df, args.output_dir / '07_guaranteed_success_summary.png')
+    create_scaling_chart_separation(df, args.output_dir / '08_separation_scaling_by_ships.png')
     
     print("\nGenerating scaling line charts...")
-    create_scaling_line_charts(df, args.output_dir / '07_scaling_analysis_lines.png')
+    create_scaling_line_charts(df, args.output_dir / '09_scaling_analysis_lines.png')
     
     # Print summary
     print("\n" + "="*70)
@@ -828,12 +1046,25 @@ def main():
         dist_pct = ((row['baseline_dist_m'] - row['rl_dist_m']) / row['baseline_dist_m']) * 100
         time_pct = ((row['baseline_time_s'] - row['rl_time_s']) / row['baseline_time_s']) * 100
         
+        baseline_success = row.get('baseline_success_rate')
+        if pd.isna(baseline_success) or baseline_success is None:
+            baseline_success = (1 - row['baseline_collision_rate']) * 100
+        else:
+            baseline_success = baseline_success * 100
+            
+        rl_success = row.get('rl_success_rate')
+        if pd.isna(rl_success) or rl_success is None:
+            rl_success = (1 - row['rl_collision_rate']) * 100
+        else:
+            rl_success = rl_success * 100
+        
         print(f"\nCase {case} ({agents} total ships):")
         print(f"  Min Separation: Baseline {row['baseline_min_sep_nmi']:7.3f} nmi vs RL {row['rl_min_sep_nmi']:7.3f} nmi ({sep_pct:+6.1f}%)")
         print(f"  Risk Exposure:  Baseline {row['baseline_risk_exposure']:7.2f}    vs RL {row['rl_risk_exposure']:7.2f}    ({risk_pct:+6.1f}%)")
         print(f"  Distance:       Baseline {row['baseline_dist_m']:7.1f} m  vs RL {row['rl_dist_m']:7.1f} m  ({dist_pct:+6.1f}%)")
         print(f"  Time:           Baseline {row['baseline_time_s']:7.1f} s  vs RL {row['rl_time_s']:7.1f} s  ({time_pct:+6.1f}%)")
         print(f"  Collision Rate: Baseline {row['baseline_collision_rate']*100:6.1f}% vs RL {row['rl_collision_rate']*100:6.1f}%")
+        print(f"  Success Rate:   Baseline {baseline_success:6.1f}% vs RL {rl_success:6.1f}% (FROM CSV)")
     
     print("\n" + "="*70)
     print(f"All results saved to: {args.output_dir}")

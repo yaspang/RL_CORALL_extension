@@ -138,7 +138,7 @@ def plot_ownship_cpa_panel_baseline_rl(
     # Create 2x2 subplot
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(f"Ownship CPA Analysis | Case {baseline_hist.get('case', '?')}",
-                 fontsize=14, fontweight="bold")
+                 fontsize=17, fontweight="bold")
     
     # 1. DCPA (top-left)
     ax = axes[0, 0]
@@ -146,11 +146,12 @@ def plot_ownship_cpa_panel_baseline_rl(
         ax.plot(tb, np.abs(ts) / NMI, "--", linewidth=1.5, alpha=0.7, label=key)
     for key, ts in dcpa_r_targets.items():
         ax.plot(tr, np.abs(ts) / NMI, "-", linewidth=1.5, alpha=0.7, label=f"{key}_RL")
-    ax.set_ylabel("DCPA (nmi)")
-    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("DCPA (nmi)", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    ax.set_title("Distance to Closest Point of Approach")
+    ax.legend(fontsize=12)
+    ax.set_title("Distance to Closest Point of Approach", fontsize=15, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=11)
     
     # 2. Risk (top-right)
     ax = axes[0, 1]
@@ -158,12 +159,13 @@ def plot_ownship_cpa_panel_baseline_rl(
         ax.plot(tb, ts, "--", linewidth=1.5, alpha=0.7, label=key)
     for key, ts in risk_r_targets.items():
         ax.plot(tr, ts, "-", linewidth=1.5, alpha=0.7, label=f"{key}_RL")
-    ax.set_ylabel("Risk")
-    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Risk", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    ax.set_title("Collision Risk")
+    ax.legend(fontsize=12)
+    ax.set_title("Collision Risk", fontsize=15, fontweight='bold')
     ax.set_ylim([0, 1.0])
+    ax.tick_params(axis='both', labelsize=10)
     
     # 3. TCPA (bottom-left) 
     ax = axes[1, 0]
@@ -171,11 +173,12 @@ def plot_ownship_cpa_panel_baseline_rl(
         ax.plot(tb, ts, "--", linewidth=1.5, alpha=0.7, label=key)
     for key, ts in tcpa_r_targets.items():
         ax.plot(tr, ts, "-", linewidth=1.5, alpha=0.7, label=f"{key}_RL")
-    ax.set_ylabel("TCPA (s)")
-    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("TCPA (s)", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
-    ax.set_title("Time to Closest Point of Approach")
+    ax.legend(fontsize=12)
+    ax.set_title("Time to Closest Point of Approach", fontsize=15, fontweight='bold')
+    ax.tick_params(axis='both', labelsize=11)
     
     # 4. Summary Risk (bottom-right)
     ax = axes[1, 1]
@@ -183,12 +186,13 @@ def plot_ownship_cpa_panel_baseline_rl(
     max_risk_r = series_max_risk(risk_r, own_idx=own_idx)
     ax.plot(tb, max_risk_b, "--", linewidth=2, label="Baseline (max risk)")
     ax.plot(tr, max_risk_r, "-", linewidth=2, label="RL (max risk)")
-    ax.set_ylabel("Max Pairwise Risk")
-    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Max Pairwise Risk", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=9)
-    ax.set_title("Aggregate Ownship Risk")
+    ax.legend(fontsize=12)
+    ax.set_title("Aggregate Ownship Risk", fontsize=15, fontweight='bold')
     ax.set_ylim([0, 1.0])
+    ax.tick_params(axis='both', labelsize=10)
     
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, bbox_inches='tight', format='png')
@@ -284,48 +288,64 @@ def plot_ownship_threat_profile(
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
 
     # DCPA (top-left) — in meters
-    axs[0, 0].plot(tb[maskb], dcpa_b_m[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[0, 0].plot(tb[maskb], dcpa_b_m[maskb], "--", linewidth=2.5, color="#1f77b4", label="Baseline")
     axs[0, 0].plot(tr[maskr], dcpa_r_m[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
     axs[0, 0].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2, label="RL episode ends")
-    axs[0, 0].set_ylabel("DCPA (m)")
-    axs[0, 0].set_title("Distance to Closest Point of Approach")
+    axs[0, 0].set_ylabel("DCPA (m)", fontsize=14, fontweight='bold')
+    axs[0, 0].set_title("Distance to Closest Point of Approach", fontsize=15, fontweight='bold')
     axs[0, 0].grid(True, alpha=0.3)
-    axs[0, 0].legend(fontsize=9, loc="best")
+    axs[0, 0].tick_params(axis='both', labelsize=11)
+    leg0 = axs[0, 0].legend(fontsize=12, loc="best")
+    for text in leg0.get_texts():
+        if "RL" in text.get_text():
+            text.set_fontweight('bold')
     if dcpa_ylim is not None:
         axs[0, 0].set_ylim(dcpa_ylim)
 
     # Range (top-right) — in meters
-    axs[0, 1].plot(tb[maskb], range_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[0, 1].plot(tb[maskb], range_b_agg[maskb], "--", linewidth=2.5, color="#1f77b4", label="Baseline")
     axs[0, 1].plot(tr[maskr], range_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
     axs[0, 1].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
-    axs[0, 1].set_ylabel("Range (m)")
-    axs[0, 1].set_title("Range (Distance)")
+    axs[0, 1].set_ylabel("Range (m)", fontsize=14, fontweight='bold')
+    axs[0, 1].set_title("Range (Distance)", fontsize=15, fontweight='bold')
     axs[0, 1].grid(True, alpha=0.3)
-    axs[0, 1].legend(fontsize=9, loc="best")
+    axs[0, 1].tick_params(axis='both', labelsize=11)
+    leg1 = axs[0, 1].legend(fontsize=12, loc="best")
+    for text in leg1.get_texts():
+        if "RL" in text.get_text():
+            text.set_fontweight('bold')
     if range_ylim is not None:
         axs[0, 1].set_ylim(range_ylim)
 
     # TCPA (bottom-left) — negative values clipped to 0
-    axs[1, 0].plot(tb[maskb], tcpa_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[1, 0].plot(tb[maskb], tcpa_b_agg[maskb], "--", linewidth=2.5, color="#1f77b4", label="Baseline")
     axs[1, 0].plot(tr[maskr], tcpa_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
     axs[1, 0].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
-    axs[1, 0].set_ylabel("TCPA (s)")
-    axs[1, 0].set_title("Time to CPA (0 = already passed)")
-    axs[1, 0].set_xlabel("Time (s)")
+    axs[1, 0].set_ylabel("TCPA (s)", fontsize=14, fontweight='bold')
+    axs[1, 0].set_title("Time to CPA (0 = already passed)", fontsize=15, fontweight='bold')
+    axs[1, 0].set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     axs[1, 0].grid(True, alpha=0.3)
-    axs[1, 0].legend(fontsize=9, loc="best")
+    axs[1, 0].tick_params(axis='both', labelsize=11)
+    leg2 = axs[1, 0].legend(fontsize=12, loc="best")
+    for text in leg2.get_texts():
+        if "RL" in text.get_text():
+            text.set_fontweight('bold')
     if tcpa_ylim is not None:
         axs[1, 0].set_ylim(tcpa_ylim)
 
     # Risk (bottom-right)
-    axs[1, 1].plot(tb[maskb], risk_b_agg[maskb], "--", linewidth=2.5, color="black", label="Baseline")
+    axs[1, 1].plot(tb[maskb], risk_b_agg[maskb], "--", linewidth=2.5, color="#1f77b4", label="Baseline")
     axs[1, 1].plot(tr[maskr], risk_r_agg[maskr], "-", linewidth=2.5, color="#ff7f0e", label="RL Policy")
     axs[1, 1].axvline(x=rl_end_time, color="#ff7f0e", linestyle=":", alpha=0.5, linewidth=1.2)
-    axs[1, 1].set_ylabel("Risk")
-    axs[1, 1].set_title("Collision Risk (Max Across All Targets)")
-    axs[1, 1].set_xlabel("Time (s)")
+    axs[1, 1].set_ylabel("Risk", fontsize=14, fontweight='bold')
+    axs[1, 1].set_title("Collision Risk (Max Across All Targets)", fontsize=15, fontweight='bold')
+    axs[1, 1].set_xlabel("Time (s)", fontsize=14, fontweight='bold')
     axs[1, 1].grid(True, alpha=0.3)
-    axs[1, 1].legend(fontsize=9, loc="best")
+    axs[1, 1].tick_params(axis='both', labelsize=11)
+    leg3 = axs[1, 1].legend(fontsize=12, loc="best")
+    for text in leg3.get_texts():
+        if "RL" in text.get_text():
+            text.set_fontweight('bold')
     if risk_ylim is not None:
         axs[1, 1].set_ylim(risk_ylim)
 
@@ -334,7 +354,7 @@ def plot_ownship_threat_profile(
     title = "Ownship CPA Panel"
     if case is not None:
         title += f" | Case {case}"
-    fig.suptitle(title, fontsize=14, fontweight="bold")
+    fig.suptitle(title, fontsize=17, fontweight="bold")
 
     fig.tight_layout(rect=(0, 0, 1.0, 0.96))
     fig.savefig(save_path, dpi=300, bbox_inches="tight", format='png')
@@ -376,7 +396,7 @@ def plot_full_trajectory_overlay(
                 xt, yt,
                 linestyle="-", linewidth=1.5, alpha=0.5,
                 color=target_color,
-                label=f"Target ship {j}" if j == 1 else f"Target ship {j}",
+                label="Target ship(s)" if j == 1 else None,
                 zorder=1,
             )
 
@@ -386,7 +406,7 @@ def plot_full_trajectory_overlay(
     xb0, yb0 = Xb[:, 0, 0], Xb[:, 0, 1]
     xr0, yr0 = Xr[:, 0, 0], Xr[:, 0, 1]
 
-    ax.plot(xb0, yb0, "--", color="black", linewidth=1.8,
+    ax.plot(xb0, yb0, "-", color="#1f77b4", linewidth=1.8,
             label="CORALL baseline", zorder=3)
     ax.plot(xr0, yr0, "-", color="#ff7f0e", linewidth=1.8,
             label="RL policy", zorder=3)
@@ -431,7 +451,7 @@ def plot_full_trajectory_overlay(
         animate_ship(
             float(Xb[ib, 0, 0]), float(Xb[ib, 0, 1]), float(Xb[ib, 0, 2]),
             LOA * ship_scale, BEAM * ship_scale,
-            cpa=0.0, color="black", ax=ax,
+            cpa=0.0, color="#1f77b4", ax=ax,
         )
 
         # RL ownship icon
@@ -462,14 +482,20 @@ def plot_full_trajectory_overlay(
     ax.set_title(
         f"Baseline vs RL Trajectory | Imazu Case {baseline_hist.get('case', '?')} "
         f"({n_agents} ships)",
-        fontsize=11, fontweight="bold",
+        fontsize=14, fontweight="bold",
     )
-    ax.set_xlabel("X position (m)", fontsize=8)
-    ax.set_ylabel("Y position (m)", fontsize=8)
+    ax.set_xlabel("X position (m)", fontsize=12)
+    ax.set_ylabel("Y position (m)", fontsize=12)
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=7)
-    ax.tick_params(axis='both', labelsize=7)
+    leg = ax.legend(loc="best", fontsize=11)
+    
+    # Highlight RL policy in legend - bold and underlined
+    for text in leg.get_texts():
+        if "RL policy" in text.get_text():
+            text.set_fontweight('bold')
+    
+    ax.tick_params(axis='both', labelsize=10)
 
     # Compute bounds from all trajectories
     all_x = [xb0, xr0]
@@ -550,7 +576,7 @@ def plot_stacked_trajectory_overlay(
         # Target trajectories
         if n_agents > 1:
             for j in range(1, n_agents):
-                lbl = f"Target ship {j}" if row == 0 else None
+                lbl = "Target ship(s)" if (row == 0 and j == 1) else None
                 ax.plot(Xb[:, j, 0], Xb[:, j, 1], "-", linewidth=1.2,
                         alpha=0.45, color=target_color, label=lbl, zorder=1)
 
@@ -560,7 +586,7 @@ def plot_stacked_trajectory_overlay(
 
         lbl_bl = "CORALL baseline" if row == 0 else None
         lbl_rl = "RL policy" if row == 0 else None
-        ax.plot(xb0, yb0, "--", color="black", linewidth=1.5, label=lbl_bl, zorder=3)
+        ax.plot(xb0, yb0, "-", color="#1f77b4", linewidth=1.5, label=lbl_bl, zorder=3)
         ax.plot(xr0, yr0, "-", color="#ff7f0e", linewidth=1.5, label=lbl_rl, zorder=3)
 
         # Start / goal markers
@@ -591,7 +617,7 @@ def plot_stacked_trajectory_overlay(
 
             animate_ship(
                 float(Xb[ib_idx, 0, 0]), float(Xb[ib_idx, 0, 1]), float(Xb[ib_idx, 0, 2]),
-                LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="black", ax=ax,
+                LOA * ship_scale, BEAM * ship_scale, cpa=0.0, color="#1f77b4", ax=ax,
             )
             if rl_active:
                 animate_ship(
@@ -645,11 +671,16 @@ def plot_stacked_trajectory_overlay(
 
     # Single legend at top
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
-               fontsize=12, framealpha=0.9, bbox_to_anchor=(0.5, 0.94),
-               prop={'weight': 'bold'})
+    leg = fig.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
+               fontsize=13, framealpha=0.95, bbox_to_anchor=(0.5, 0.98),
+               prop={'weight': 'bold'}, edgecolor='black', fancybox=True)
+    
+    # Highlight "RL policy" - bold
+    for text in leg.get_texts():
+        if "RL policy" in text.get_text():
+            text.set_fontweight('bold')
 
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
     fig.savefig(save_path, dpi=300, format='png', bbox_inches='tight')
     plt.close(fig)
     return Path(save_path)
@@ -697,7 +728,7 @@ def plot_encounter_detail_clean(
 
     fig, ax = plt.subplots(figsize=(9, 8))
 
-    ax.plot(xb0[i0_b:i1_b], yb0[i0_b:i1_b], "--", color="black", linewidth=2.5, label="Baseline ownship")
+    ax.plot(xb0[i0_b:i1_b], yb0[i0_b:i1_b], "-", color="#1f77b4", linewidth=2.5, label="Baseline ownship")
     ax.plot(xr0[i0_r:i1_r], yr0[i0_r:i1_r], "-", color="#ff7f0e", linewidth=2.5, label="RL ownship")
 
     # Target trajectories - same color for cleaner visualization
@@ -778,12 +809,18 @@ def plot_encounter_detail_clean(
 
     ax.set_title(
         f"Encounter detail | Imazu case {baseline_hist.get('case', '?')}",
-        fontsize=14, fontweight="bold"
+        fontsize=15, fontweight="bold"
     )
-    ax.set_xlabel("X position (nmi)")
-    ax.set_ylabel("Y position (nmi)")
+    ax.set_xlabel("X position (nmi)", fontsize=13)
+    ax.set_ylabel("Y position (nmi)", fontsize=13)
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
+    leg = ax.legend(loc="best", fontsize=12)
+    
+    # Highlight RL in legend - bold and underlined
+    for text in leg.get_texts():
+        if "RL" in text.get_text() or "policy" in text.get_text():
+            text.set_fontweight('bold')
+    
     fig.tight_layout()
     fig.savefig(save_path, dpi=300, format='png')
     plt.close(fig)
@@ -1104,12 +1141,12 @@ def plot_episode_overlay(
     xto = Xt[:, own_idx, 0] / NMI
     yto = Xt[:, own_idx, 1] / NMI
 
-    ax.plot(xbo, ybo, linestyle="--", linewidth=2.6, color="black", label="CORALL baseline ownship", zorder=3)
+    ax.plot(xbo, ybo, linestyle="-", linewidth=2.6, color="#1f77b4", label="CORALL baseline ownship", zorder=3)
     ax.plot(xto, yto, linestyle="--", linewidth=2.8, color="#ff7f0e", label="RL policy ownship", zorder=3)
 
     # start and end markers
-    ax.scatter(xbo[0], ybo[0], color="black", s=80, marker='o', zorder=4, label="Start")  # baseline start
-    ax.scatter(xbo[-1], ybo[-1], color="black", s=80, marker='*', zorder=4, label="Baseline End")  # baseline end
+    ax.scatter(xbo[0], ybo[0], color="#1f77b4", s=80, marker='o', zorder=4, label="Start")  # baseline start
+    ax.scatter(xbo[-1], ybo[-1], color="#1f77b4", s=80, marker='*', zorder=4, label="Baseline End")  # baseline end
     ax.scatter(xto[-1], yto[-1], color="#ff7f0e", s=80, marker='*', zorder=4, label="RL End")  # RL end
 
     # closest approach markers for ownship
@@ -1190,7 +1227,7 @@ def plot_risk_dcpa_timeseries(
     dcpa_t = np.clip(dcpa_t, 0, 5) # 0-5nmi is meaningful DCPA
 
     fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(tb, risk_b, linestyle="--", linewidth=2.2, color="black", label="Baseline max Risk", zorder=3)
+    ax1.plot(tb, risk_b, linestyle="--", linewidth=2.2, color="#1f77b4", label="Baseline max Risk", zorder=3)
     ax1.plot(tt, risk_t, linestyle="-", linewidth=2.2, color="#ff7f0e", label="RL max Risk", zorder=3)
     ax1.set_xlabel("Time (s)")
     ax1.set_ylabel("Max pairwise risk")
@@ -1317,7 +1354,7 @@ def plot_encounter_overlay(
     xbt = Xb[i0:i1, target_idx, 0] / NMI
     ybt = Xb[i0:i1, target_idx, 1] / NMI
 
-    ax.plot(xbo, ybo, "--", color="black", linewidth=2.8, label="Baseline ownship", zorder=3)
+    ax.plot(xbo, ybo, "-", color="#1f77b4", linewidth=2.8, label="Baseline ownship", zorder=3)
     ax.plot(xto, yto, "-", color="#ff7f0e", linewidth=2.8, label="RL ownship", zorder=3)
     ax.plot(xbt, ybt, "-", color="tab:blue", linewidth=2.2, alpha=0.85, label=f"Target ship {target_idx}", zorder=2)
 

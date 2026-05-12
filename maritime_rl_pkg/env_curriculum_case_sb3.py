@@ -34,7 +34,7 @@ class CurriculumCaseEnv(gym.Wrapper):
         6: 8 + 2*6,   # 2 obstacles = 20
         21: 8 + 3*6,  # 3 obstacles = 26
     }
-    MAX_OBS_SIZE = 26  # Case 21
+    MAX_OBS_SIZE = 29  # v8: 8 (own) + 3 (goal bearing/distance) + 18 (3 obstacles × 6)
 
     def __init__(
         self,
