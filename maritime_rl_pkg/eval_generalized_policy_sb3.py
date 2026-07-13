@@ -154,6 +154,12 @@ def parse_args():
         default=None,
         help="Ownship cruising speed used during evaluation (should match training)"
     )
+    p.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Optional output directory for evaluation results"
+    )
     return p.parse_args()
 
 
@@ -288,7 +294,7 @@ def evaluate_policy(args):
     
     model_obs_size = model.observation_space.shape[0]
     if model_obs_size != MAX_OBS_SIZE:
-        print(f"⚠ Warning: Model expects {model_obs_size}-dim observations, expected {MAX_OBS_SIZE}")
+        print(f"[WARN] Model expects {model_obs_size}-dim observations, expected {MAX_OBS_SIZE}")
     
     # Create environment using RandomCaseEnv (ensures 26-dim padding)
     from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
@@ -307,8 +313,11 @@ def evaluate_policy(args):
     )
     
     # Output directory
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_dir = Path(f"policy_eval_generalized_sb3_case{args.case}_{timestamp}")
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir)
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_dir = Path(f"policy_eval_generalized_sb3_case{args.case}_{timestamp}")
     seed_dir = output_dir / f"seed_{args.seed}"
     seed_dir.mkdir(parents=True, exist_ok=True)
     
@@ -332,7 +341,7 @@ def evaluate_policy(args):
         if history is not None:
             hist_path = histories_dir / f"case{args.case}_seed{ep_seed}_ep{ep:03d}.npz"
             save_episode_history(history, hist_path)
-            print(f"[{ep+1:3d}/{args.episodes}] ✓ history saved → {hist_path.name}")
+            print(f"[{ep+1:3d}/{args.episodes}] [OK] history saved -> {hist_path.name}")
         else:
             print(f"[{ep+1:3d}/{args.episodes}] return={metrics['episode_return']:8.2f}, "
                   f"collision={metrics['collision_any']}, success={metrics['success_ownship']:.0f}")
@@ -347,7 +356,7 @@ def evaluate_policy(args):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(per_episode_results)
-        print(f"\n✓ Per-episode results saved to: {csv_path}")
+        print(f"\n[OK] Per-episode results saved to: {csv_path}")
     
     # Aggregate results
     agg_results = {}
@@ -371,7 +380,7 @@ def evaluate_policy(args):
     summary_path = seed_dir / "policy_eval_summary.json"
     with open(summary_path, 'w') as f:
         json.dump(agg_results, f, indent=2)
-    print(f"✓ Summary saved to: {summary_path}\n")
+    print(f"[OK] Summary saved to: {summary_path}\n")
     
     # Print summary
     print(f"\n{'='*70}")

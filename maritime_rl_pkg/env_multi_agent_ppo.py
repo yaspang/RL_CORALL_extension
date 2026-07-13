@@ -458,10 +458,10 @@ class MultiShipParallelEnv(ParallelEnv):
         """
         return {
             'progress': 200.0,       # delta-progress reward
-            'risk': -30.0,           # moderate risk penalty
+            'risk': -60.0,           # high risk penalty
             'separation': 2.0,       # safe separation reward
-            'collision': -600.0,     # hard collision penalty 
-            'success': 250.0,        # waypoint completion reward 
+            'collision': -10000.0,   # hard collision penalty 
+            'success': 1000.0,       # waypoint completion reward 
         }
 
     def reset_internal_state(self):
@@ -980,21 +980,34 @@ class MultiShipParallelEnv(ParallelEnv):
             collision = (min_dist < LOA)
 
             w_collision = self.reward_weights['collision']
+            infos[agent]["collision"] = bool(collision)
 
             # If collision, agent fails immediately - no success possible
+            ## override the shaped reward with a large negative penalty for collision (hard terminal failure in learning signal)
             if collision:
                 if self.episode_metrics[agent]["collision"] == 0:
                     self.episode_metrics[agent]["collision"] = 1
+                    self.episode_metrics[agent]["success"] = 0
+                    self.episode_metrics[agent]["goal_passed"] = 0
+
                     # Per-agent termination: collision ends THIS agent's episode immediately
                     # (Other agents continue in multi-agent scenarios)
                     terminations[agent] = True
+                    truncations[agent] = False 
+
                     if np.isnan(self.episode_metrics[agent]["completion_time_s"]):
                         self.episode_metrics[agent]["completion_time_s"] = self.t
+
                     # Mark agent as done so we stop collecting metrics
                     self.agent_reached_goal[agent] = True
+                 
+                infos[agent]["success"] = False  
+                infos[agent]["terminal_reason"] = "collision"
+                infos[agent]["hard_collision_penalty"] = float(w_collision)
                 
-                infos[agent]["success"] = False  # Collision = automatic failure
-                total += w_collision
+                # Collision reward is exactly the hard penalty - this is a terminal failure signal for learning
+                total = float(w_collision)
+
             else:
                 # No collision: now check if agent reached goal
                 # Success: reached final wp and within radius 
@@ -1008,6 +1021,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 
                 # success if: reached final waypoint using waypoint_selection() built-in threshold (~200m from CORALL planning.py)
                 final_waypoint_reached_by_index = (i_wpt_k >= len(Xwpt_k) - 1)
+                infos[agent]["terminal_reason"] = None # No collision, not yet at final waypoint
                 
                 # DEBUG: Log waypoint indices and distances
                 infos[agent]["debug_i_wpt_k"] = i_wpt_k
@@ -1048,6 +1062,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 if final_reached:
                     # Agent reached goal safely - grant success reward
                     infos[agent]["success"] = True
+                    infos[agent]["terminal_reason"] = "success"
                     total += w_success  # Reward agents for reaching destination
                     self.episode_metrics[agent]["success"] = 1
                     self.episode_metrics[agent]["goal_passed"] = 1
@@ -1067,6 +1082,8 @@ class MultiShipParallelEnv(ParallelEnv):
             finite_d = np.isfinite(pair_dist[k])
             min_dist = float(np.min(pair_dist[k][finite_d])) if np.any(finite_d) else np.inf
             collision = (min_dist < LOA) 
+
+            w_collision = self.reward_weights['collision']
             infos[agent]["min_dist"] = min_dist
             
             if not agent_already_done:

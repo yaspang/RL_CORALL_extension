@@ -5,14 +5,25 @@ This wrapper randomizes cases and seeds at each episode reset,
 enabling training of a single policy that generalizes across difficulty levels
 and random encounter geometries.
 
+HARD-CASE OVERSAMPLING:
+======================
+Supports sensitive training with weighted case sampling:
+  - 50% random curriculum cases (based on difficulty progression)
+  - 30% hard Imazu cases + recent failures (cases 13, 18, 20, 21 + tracked failures)
+  - 20% easy cases (prevent catastrophic forgetting)
+
+Enable via: hard_case_oversampling=True
+Update failures via: env.update_hard_case_pool(failures_dict)
 
 """
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Any, List
+from typing import Optional, Tuple, Any, List, Dict, Set
 import numpy as np
 import gymnasium as gym
+import json
+from pathlib import Path
 
 from .env_single_agent_sb3 import SingleAgentOwnshipEnv
 
@@ -62,6 +73,10 @@ class RandomCaseEnv(gym.Wrapper):
     ]
     CURRICULUM_TRANSITION = 200000  # steps for smooth blending between phases
     
+    # Hard-case oversampling: known trouble cases (Imazu scenarios)
+    HARD_CASES = [13, 18, 20, 21]  # Problematic cases to oversample
+    EASY_CASES = [1, 5, 12]        # Representative easy cases for anti-forgetting
+    
     def __init__(
         self,
         cases_to_train: List[int] = [1, 6, 21],
@@ -77,6 +92,8 @@ class RandomCaseEnv(gym.Wrapper):
         target_speed_mps: float = 10.0,
         ownship_speed_mps: Optional[float] = None,
         enable_curriculum: bool = True,
+        hard_case_oversampling: bool = False,
+        hard_case_pool_file: Optional[str] = None,
     ):
         # Create initial environment (case doesn't matter, will be randomized at reset)
         base_env = SingleAgentOwnshipEnv(
@@ -113,6 +130,22 @@ class RandomCaseEnv(gym.Wrapper):
         self.enable_curriculum = enable_curriculum
         self.current_step = 0
         
+        # Hard-case oversampling (failure replay)
+        self.hard_case_oversampling = hard_case_oversampling
+        self.hard_case_pool_file = hard_case_pool_file
+        self.hard_case_pool: Dict[int, Set[int]] = {}  # {case: {seed1, seed2, ...}}
+        self.failure_case_seed_pairs: Set[Tuple[int, int]] = set()  # (case, seed) pairs that failed
+        
+        # Load hard-case pool from file if provided
+        if hard_case_oversampling and hard_case_pool_file:
+            self._load_hard_case_pool(hard_case_pool_file)
+        
+        # Initialize hard case pool with known problem cases
+        if hard_case_oversampling and not self.hard_case_pool:
+            for case in self.HARD_CASES:
+                if case in self.cases_to_train:
+                    self.hard_case_pool[case] = set(range(self.num_seeds))  # All seeds initially available
+        
         # Tracking for logging
         self.episode_count = 0
         self.current_case = cases_to_train[0]
@@ -125,6 +158,62 @@ class RandomCaseEnv(gym.Wrapper):
             shape=(self.MAX_OBS_SIZE,),
             dtype=np.float32
         )
+
+    def _load_hard_case_pool(self, pool_file: str):
+        """Load hard case pool from JSON file."""
+        try:
+            pool_path = Path(pool_file)
+            if pool_path.exists():
+                with open(pool_path, 'r') as f:
+                    pool_data = json.load(f)
+                # Convert list of dicts to {case: set(seeds)}
+                self.hard_case_pool = {
+                    int(case): set(pool_data.get(str(case), list(range(self.num_seeds))))
+                    for case in self.HARD_CASES
+                    if int(case) in self.cases_to_train
+                }
+                print(f"[HardCaseOversampling] Loaded pool from {pool_file}: {len(self.hard_case_pool)} cases")
+        except Exception as e:
+            print(f"[HardCaseOversampling] Failed to load pool from {pool_file}: {e}")
+    
+    def update_hard_case_pool(self, failures_dict: Dict[int, List[int]]):
+        """
+        Update hard case pool with newly failed cases/seeds.
+        
+        Args:
+            failures_dict: {case: [seed1, seed2, ...]} of cases/seeds to add to hard pool
+        """
+        if not self.hard_case_oversampling:
+            return
+        
+        for case, seeds in failures_dict.items():
+            case = int(case)
+            if case not in self.cases_to_train:
+                continue
+            
+            if case not in self.hard_case_pool:
+                self.hard_case_pool[case] = set()
+            
+            # Add failed seeds to the pool
+            self.hard_case_pool[case].update(int(s) for s in seeds)
+        
+        print(f"[HardCaseOversampling] Updated pool with {len(failures_dict)} cases")
+        if self.hard_case_pool_file:
+            self._save_hard_case_pool(self.hard_case_pool_file)
+    
+    def _save_hard_case_pool(self, pool_file: str):
+        """Save hard case pool to JSON file."""
+        try:
+            pool_data = {
+                str(case): list(seeds)
+                for case, seeds in self.hard_case_pool.items()
+            }
+            pool_path = Path(pool_file)
+            pool_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(pool_path, 'w') as f:
+                json.dump(pool_data, f, indent=2)
+        except Exception as e:
+            print(f"[HardCaseOversampling] Failed to save pool to {pool_file}: {e}")
 
     def _get_curriculum_available_cases(self) -> List[int]:
         """Get available cases at current training step based on curriculum."""
@@ -269,10 +358,13 @@ class RandomCaseEnv(gym.Wrapper):
         """
         Reset environment with curriculum-controlled case and random seed.
         
-        Curriculum progressively unlocks harder cases with weighted sampling to prevent forgetting:
-        - Phase 1: 2-ship uniform
-        - Phase 2: 2-ship + 3-ship uniform
-        - Phase 3: 4-ship focused (80%) with 2-ship/3-ship maintenance (5%/15%)
+        With hard_case_oversampling:
+          - 50% random curriculum cases
+          - 30% hard Imazu cases + recent failures
+          - 20% easy cases (anti-forgetting)
+        
+        Without oversampling:
+          - Uniform or curriculum-weighted sampling from available cases
         """
         # Use provided seed or master RNG for case/seed sequence
         if seed is not None:
@@ -280,26 +372,25 @@ class RandomCaseEnv(gym.Wrapper):
         else:
             local_rng = self.rng
 
-        # Get curriculum-controlled available cases
-        available_cases = self._get_curriculum_available_cases()
-        
-        if not available_cases:
-            raise ValueError("No available cases for sampling")
-        
-        # Sample case with weighted probabilities (prevents forgetting)
-        case_weights = self._get_case_sampling_weights()
-        case_probs = np.array([case_weights.get(c, 1.0 / len(available_cases)) for c in available_cases])
-        
-        # Ensure probabilities are valid
-        prob_sum = case_probs.sum()
-        if prob_sum > 0:
-            case_probs = case_probs / prob_sum
+        # Select case using appropriate strategy
+        if self.hard_case_oversampling:
+            self.current_case, self.current_seed = self._sample_case_with_hard_oversampling(local_rng)
         else:
-            case_probs = np.ones(len(available_cases)) / len(available_cases)
-        
-        # Sample case weighted by difficulty
-        self.current_case = int(local_rng.choice(available_cases, p=case_probs))
-        self.current_seed = int(local_rng.integers(0, self.num_seeds))
+            # Original curriculum-based sampling
+            available_cases = self._get_curriculum_available_cases()
+            if not available_cases:
+                raise ValueError("No available cases for sampling")
+            
+            case_weights = self._get_case_sampling_weights()
+            case_probs = np.array([case_weights.get(c, 1.0 / len(available_cases)) for c in available_cases])
+            prob_sum = case_probs.sum()
+            if prob_sum > 0:
+                case_probs = case_probs / prob_sum
+            else:
+                case_probs = np.ones(len(available_cases)) / len(available_cases)
+            
+            self.current_case = int(local_rng.choice(available_cases, p=case_probs))
+            self.current_seed = int(local_rng.integers(0, self.num_seeds))
         
         # Create new environment with random case/seed and geometry parameters
         self.env = SingleAgentOwnshipEnv(
@@ -326,6 +417,71 @@ class RandomCaseEnv(gym.Wrapper):
         info["episode"] = self.episode_count
 
         return obs, info
+    
+    def _sample_case_with_hard_oversampling(self, local_rng: np.random.Generator) -> Tuple[int, int]:
+        """
+        Sample case and seed using stratified hard-case oversampling:
+          - 50% from curriculum cases
+          - 30% from hard cases (Imazu + tracked failures)
+          - 20% from easy cases
+        
+        Returns: (case, seed)
+        """
+        # Get curriculum cases
+        curriculum_cases = self._get_curriculum_available_cases()
+        
+        # Get hard cases (intersection of HARD_CASES with cases_to_train)
+        hard_cases_available = [c for c in self.HARD_CASES if c in self.cases_to_train]
+        
+        # Add dynamically tracked failures to hard pool
+        for case, seeds in self.hard_case_pool.items():
+            if case in self.cases_to_train and case not in hard_cases_available:
+                hard_cases_available.append(case)
+        
+        # Get easy cases
+        easy_cases_available = [c for c in self.EASY_CASES if c in self.cases_to_train]
+        
+        # Stratified sampling: 50% curriculum, 30% hard, 20% easy
+        pool_selector = local_rng.random()
+        
+        if pool_selector < 0.5:
+            # 50%: Sample from curriculum
+            if curriculum_cases:
+                case = int(local_rng.choice(curriculum_cases))
+            elif hard_cases_available:
+                case = int(local_rng.choice(hard_cases_available))
+            else:
+                case = int(local_rng.choice(self.cases_to_train))
+        
+        elif pool_selector < 0.8:
+            # 30%: Sample from hard cases
+            if hard_cases_available:
+                case = int(local_rng.choice(hard_cases_available))
+            elif curriculum_cases:
+                case = int(local_rng.choice(curriculum_cases))
+            else:
+                case = int(local_rng.choice(self.cases_to_train))
+        
+        else:
+            # 20%: Sample from easy cases (anti-forgetting)
+            if easy_cases_available:
+                case = int(local_rng.choice(easy_cases_available))
+            elif curriculum_cases:
+                case = int(local_rng.choice(curriculum_cases))
+            else:
+                case = int(local_rng.choice(self.cases_to_train))
+        
+        # For hard cases with tracked failures, preferentially sample failed seeds
+        if case in self.hard_case_pool and self.hard_case_pool[case]:
+            # 70% chance to sample from failed seeds, 30% random
+            if local_rng.random() < 0.7:
+                seed = int(local_rng.choice(list(self.hard_case_pool[case])))
+            else:
+                seed = int(local_rng.integers(0, self.num_seeds))
+        else:
+            seed = int(local_rng.integers(0, self.num_seeds))
+        
+        return case, seed
         
     def step(self, action) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """Step environment (delegated to wrapped env). Returns padded observation."""

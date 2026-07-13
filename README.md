@@ -139,7 +139,7 @@ Single-Agent Training Pipeline:
   - N-steps: 256 | Batch size: 256
   - Gamma: 0.99 | GAE Lambda: 0.95
   - Clip range: 0.2
-- Total training: 2.5M steps (~10-12 hours GPU)
+- Total training: 2.5M steps 
 
 **Training Workflow**:
 ```python

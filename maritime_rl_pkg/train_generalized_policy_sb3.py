@@ -24,6 +24,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from maritime_rl_pkg.env_random_case_sb3 import RandomCaseEnv
+from maritime_rl_pkg.env_procedural_encounter_sb3 import RandomEncounterEnv
 from maritime_rl_pkg.episode_tracker import EpisodeReturnTracker
 
 
@@ -608,6 +609,14 @@ def main():
                         help="Obstacle speed in m/s (default: 10.0, use 8.5-9.0 for slower obstacles)")
     parser.add_argument("--ownship_speed_mps", type=float, default=None,
                         help="Ownship cruising speed in m/s (default: None = inherit from first obstacle). Use 11.0 for slight speed advantage.")
+    parser.add_argument("--hard_case_oversampling", action="store_true",
+                        help="Enable hard-case oversampling (50% curriculum, 30% hard Imazu cases, 20% easy cases)")
+    parser.add_argument("--hard_case_pool_file", type=str, default=None,
+                        help="Path to JSON file tracking failed (case, seed) pairs for failure replay")
+    parser.add_argument("--use_procedural_encounters", action="store_true",
+                        help="Use procedurally generated random encounters instead of canonical Imazu cases (1-22)")
+    parser.add_argument("--sim_time", type=float, default=900.0,
+                        help="Episode horizon in seconds. Use 900.0 for primary mission training/evaluation.")
     
     args = parser.parse_args()
     
@@ -618,7 +627,16 @@ def main():
     print("TRAINING GENERALIZED POLICY ACROSS MULTIPLE CASES")
     print("=" * 80)
     print(f"\nConfiguration:")
-    print(f"  Cases to train on:         {args.cases}")
+    if args.use_procedural_encounters:
+        print(f"  Encounter mode:            PROCEDURAL (random generation)")
+        print(f"    - Phase 1 (0-1M steps): 2-agent scenarios")
+        print(f"    - Phase 2 (1M-2M steps): 2-3 agent scenarios")
+        print(f"    - Phase 3 (2M+ steps): 2-4 agent scenarios")
+        print(f"    - Target speed range: {6.0}-{14.0} m/s")
+        print(f"    - Ownship speed range: {9.0}-{12.0} m/s")
+    else:
+        print(f"  Encounter mode:            CANONICAL Imazu cases")
+        print(f"  Cases to train on:         {args.cases}")
     print(f"  Total steps:               {args.num_steps:,}")
     print(f"  Checkpoint freq:           {args.checkpoint_freq:,}")
     print(f"  Parallel workers:          {args.num_workers}")
@@ -631,6 +649,10 @@ def main():
     print(f"  Ownship speed (m/s):       {args.ownship_speed_mps if args.ownship_speed_mps else 'inherit from obstacles'}")
     print(f"  Master seed:               {args.master_seed if args.master_seed is not None else 'random'}")
     print(f"  MLP architecture:          {args.mlp_hiddens}")
+    print(f"  Hard-case oversampling:    {'ENABLED' if args.hard_case_oversampling else 'disabled'}")
+    if args.hard_case_oversampling:
+        print(f"    - 50% curriculum, 30% hard cases (13,18,20,21), 20% easy cases")
+        print(f"    - Hard case pool file: {args.hard_case_pool_file if args.hard_case_pool_file else '(none, will use defaults)'}")
     print(f"\nOutput directory:            {output_dir}")
     print(f"Timestamp:                   {timestamp}")
     print("=" * 80 + "\n")
@@ -639,21 +661,39 @@ def main():
     
     try:
         # Create environment (will randomize case/seed at each reset with reproducible sequence)
-        env = RandomCaseEnv(
-            cases_to_train=args.cases,
-            num_seeds=100,
-            dt=0.5,
-            sim_time=490.0,
-            n_heading=7,
-            max_heading_change_deg=25.0,
-            loa_m=30.0,
-            route_len_nmi=2.0,
-            master_seed=args.master_seed,
-            desired_cross_x_nmi=args.desired_cross_x_nmi,
-            target_speed_mps=args.target_speed_mps,
-            ownship_speed_mps=args.ownship_speed_mps,
-            enable_curriculum=True,  # Enable curriculum by agent count (2-ship -> 3-ship -> 4-ship)
-        )
+        if args.use_procedural_encounters:
+            # Use procedurally generated random encounters
+            env = RandomEncounterEnv(
+                ownship_speed_mps=args.ownship_speed_mps if args.ownship_speed_mps is not None else 10.0,
+                target_speed_range=(6.0, 14.0),
+                desired_cross_x_nmi=args.desired_cross_x_nmi,
+                dt=0.5,
+                sim_time=args.sim_time,
+                n_heading=7,
+                max_heading_change_deg=25.0,
+                loa_m=30.0,
+                route_len_nmi=2.0,
+                master_seed=args.master_seed,
+            )
+        else:
+            # Use canonical Imazu cases with curriculum
+            env = RandomCaseEnv(
+                cases_to_train=args.cases,
+                num_seeds=100,
+                dt=0.5,
+                sim_time=args.sim_time,
+                n_heading=7,
+                max_heading_change_deg=25.0,
+                loa_m=30.0,
+                route_len_nmi=2.0,
+                master_seed=args.master_seed,
+                desired_cross_x_nmi=args.desired_cross_x_nmi,
+                target_speed_mps=args.target_speed_mps,
+                ownship_speed_mps=args.ownship_speed_mps,
+                enable_curriculum=True,  # Enable curriculum by agent count (2-ship -> 3-ship -> 4-ship)
+                hard_case_oversampling=args.hard_case_oversampling,
+                hard_case_pool_file=args.hard_case_pool_file,
+            )
         
         
         # Wrap with Monitor for proper episode return tracking
@@ -794,6 +834,9 @@ def main():
             "desired_cross_x_nmi": args.desired_cross_x_nmi,
             "target_speed_mps": args.target_speed_mps,
             "ownship_speed_mps": args.ownship_speed_mps,
+            "sim_time": args.sim_time,
+            "dt": 0.5,
+            "route_len_nmi": 2.0,
             "timestamp": timestamp,
         }
         
