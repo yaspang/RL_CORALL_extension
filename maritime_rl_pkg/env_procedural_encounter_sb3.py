@@ -56,11 +56,22 @@ class RandomEncounterEnv(gym.Wrapper):
 
     MAX_OBS_SIZE = 29
 
-    # Curriculum phases: (step_threshold, max_n_agents_total)
-    DEFAULT_PHASES = [
-        (0,       2),
-        (1000000, 3),
-        (2000000, 4),
+    # ---- OLD hard-phase curriculum (commented out, preserved for reference) ----
+    # DEFAULT_PHASES = [
+    #     (0,       2),   # 0-1M steps: 2-ship only (1 obstacle)
+    #     (1000000, 3),   # 1M-2M steps: up to 3-ship (1-2 obstacles, uniform)
+    #     (2000000, 4),   # 2M+  steps: up to 4-ship (1-3 obstacles, uniform)
+    # ]
+
+    # ---- NEW stochastic mixed curriculum (active) ----
+    # Each phase: (step_threshold, [p_1obs, p_2obs, p_3obs])
+    #   0-250k :  80% one target, 15% two targets,  5% three targets
+    #   250k-750k: 60% one target, 30% two targets, 10% three targets
+    #   750k+  :  40% one target, 40% two targets, 20% three targets
+    STOCHASTIC_PHASES = [
+        (0,       [0.80, 0.15, 0.05]),
+        (250_000, [0.60, 0.30, 0.10]),
+        (750_000, [0.40, 0.40, 0.20]),
     ]
 
     def __init__(
@@ -68,10 +79,11 @@ class RandomEncounterEnv(gym.Wrapper):
         ownship_speed_mps: float = 10.0,
         target_speed_range: Tuple[float, float] = (6.0, 14.0),
         desired_cross_x_nmi: float = 1.0,
-        num_agents_curriculum: Optional[List[int]] = None,
+        # num_agents_curriculum: Optional[List[int]] = None,  # old hard-phase arg, replaced by STOCHASTIC_PHASES
         dt: float = 0.5,
         sim_time: float = 490.0,
         n_heading: int = 7,
+        n_speed: int = 5,
         max_heading_change_deg: float = 25.0,
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
@@ -82,6 +94,7 @@ class RandomEncounterEnv(gym.Wrapper):
         base_env = SingleAgentOwnshipEnv(
             case_number=1,
             dt=dt, sim_time=sim_time, n_heading=n_heading,
+            n_speed=n_speed,
             max_heading_change_deg=max_heading_change_deg,
             loa_m=loa_m, route_len_nmi=route_len_nmi,
             seed=0,
@@ -99,20 +112,22 @@ class RandomEncounterEnv(gym.Wrapper):
         self.dt = float(dt)
         self.sim_time = float(sim_time)
         self.n_heading = int(n_heading)
+        self.n_speed = int(n_speed)
         self.max_heading_change_deg = float(max_heading_change_deg)
         self.loa_m = float(loa_m)
         self.route_len_nmi = float(route_len_nmi)
 
         self.rng = np.random.default_rng(master_seed)
 
-        if num_agents_curriculum is None:
-            self.curriculum_phases = self.DEFAULT_PHASES
-        else:
-            thresholds = [0, 1_000_000, 2_000_000]
-            self.curriculum_phases = [
-                (thresholds[i], num_agents_curriculum[i])
-                for i in range(len(num_agents_curriculum))
-            ]
+        # Old hard-phase init (commented out)
+        # if num_agents_curriculum is None:
+        #     self.curriculum_phases = self.DEFAULT_PHASES
+        # else:
+        #     thresholds = [0, 1_000_000, 2_000_000]
+        #     self.curriculum_phases = [
+        #         (thresholds[i], num_agents_curriculum[i])
+        #         for i in range(len(num_agents_curriculum))
+        #     ]
 
         self.current_step = 0
         self.episode_count = 0
@@ -134,13 +149,21 @@ class RandomEncounterEnv(gym.Wrapper):
     # Curriculum
     # ------------------------------------------------------------------
 
-    def _get_max_agents_for_phase(self) -> int:
-        """Max total agents (ownship + obstacles) for current training step."""
-        max_agents = 2
-        for threshold, agents in self.curriculum_phases:
+    # def _get_max_agents_for_phase(self) -> int:
+    #     """OLD: Max total agents (ownship + obstacles) for current training step."""
+    #     max_agents = 2
+    #     for threshold, agents in self.curriculum_phases:
+    #         if self.current_step >= threshold:
+    #             max_agents = agents
+    #     return max_agents
+
+    def _get_n_obstacles_weights(self) -> list:
+        """Return [p_1obs, p_2obs, p_3obs] for the current training step."""
+        weights = self.STOCHASTIC_PHASES[0][1]  # default: first phase
+        for threshold, phase_weights in self.STOCHASTIC_PHASES:
             if self.current_step >= threshold:
-                max_agents = agents
-        return max_agents
+                weights = phase_weights
+        return weights
 
     # ------------------------------------------------------------------
     # Template case map (built once at init)
@@ -238,9 +261,12 @@ class RandomEncounterEnv(gym.Wrapper):
           4. Override _case_cache with backwards-computed geometry
           5. Call env.reset() → init_from_case() uses the new geometry
         """
-        # --- curriculum ---
-        max_agents = self._get_max_agents_for_phase()
-        n_obstacles = int(self.rng.integers(1, max_agents))   # 1 … max_agents-1
+        # --- curriculum: stochastic mixed sampling ---
+        # Old hard-phase sampling (commented out):
+        # max_agents = self._get_max_agents_for_phase()
+        # n_obstacles = int(self.rng.integers(1, max_agents))   # 1 … max_agents-1
+        weights = self._get_n_obstacles_weights()  # [p_1obs, p_2obs, p_3obs]
+        n_obstacles = int(self.rng.choice([1, 2, 3], p=weights))
 
         # --- encounter params ---
         cross_x_nmi = float(self.rng.uniform(
@@ -263,6 +289,7 @@ class RandomEncounterEnv(gym.Wrapper):
             dt=self.dt,
             sim_time=self.sim_time,
             n_heading=self.n_heading,
+            n_speed=self.n_speed,
             max_heading_change_deg=self.max_heading_change_deg,
             loa_m=self.loa_m,
             route_len_nmi=self.route_len_nmi,

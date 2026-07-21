@@ -70,6 +70,7 @@ def evaluate_checkpoint_on_case(
     target_speed_mps: float = 10.0,
     ownship_speed_mps: float = 10.0,
     sim_time: float = 900.0,
+    timeout_s: int = 1800,
 ) -> Optional[Dict]:
     """
     Evaluate checkpoint on single case by calling eval_generalized_policy_sb3.
@@ -104,7 +105,7 @@ def evaluate_checkpoint_on_case(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=300,
+            timeout=timeout_s,
             env=env,
         )
         if result.returncode != 0:
@@ -142,6 +143,7 @@ def evaluate_checkpoint_on_case(
         return {
             'collision_rate': float(summary["collision_any_mean"]),
             'success_rate': float(summary["success_ownship_mean"]),
+            'near_miss_rate': float(summary.get("near_miss_ownship_mean", 0.0)),
             'risk_exposure': float(summary["risk_exposure_ownship_mean"]),
             'min_sep': float(summary["min_actual_sep_m_ownship_mean"]),
             'completion_time': float(summary.get("completion_time_s_ownship_mean", np.nan)),
@@ -212,6 +214,7 @@ def format_checkpoint_row(step: int, metrics: Dict, score: float) -> Dict:
         'acceptable': (
             metrics.get('collision_rate', 1.0) == 0.0
             and metrics.get('success_rate', 0.0) == 1.0
+            and metrics.get('near_miss_rate', 1.0) == 0.0
         ),
     }
 
@@ -253,6 +256,12 @@ def main():
         "--smoke_test",
         action="store_true",
         help="Smoke test mode: evaluate only checkpoint 50k + case 1 for validation"
+    )
+    parser.add_argument(
+        "--checkpoint_stride",
+        type=int,
+        default=1,
+        help="Evaluate every Nth checkpoint (e.g., 2 = every other, halving the total). Default: 1 (all)"
     )
     
     # Weights (should sum to 1.0)
@@ -306,6 +315,19 @@ def main():
         default=0.05,
         help="Weight for separation maintenance (default: 0.05)"
     )
+    parser.add_argument(
+        "--eval_timeout",
+        type=int,
+        default=1800,
+        help="Wall-clock timeout in seconds for each checkpoint/case evaluation."
+    )
+    parser.add_argument(
+        "--only_steps",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Only evaluate specific checkpoint steps, e.g. --only_steps 50000 150000 350000"
+    )
     
     args = parser.parse_args()
     
@@ -353,7 +375,20 @@ def main():
     for step, path in checkpoints:
         print(f"  Step {step:7d}: {path.name}")
     print()
-    
+
+    # Apply stride to reduce the number of checkpoints evaluated
+    if args.checkpoint_stride > 1:
+        checkpoints = checkpoints[::args.checkpoint_stride]
+        print(f"[INFO] checkpoint_stride={args.checkpoint_stride}: reduced to {len(checkpoints)} checkpoints")
+        for step, path in checkpoints:
+            print(f"  Step {step:7d}: {path.name}")
+        print()
+
+    if args.only_steps is not None:
+        wanted = set(args.only_steps)
+        checkpoints = [(step, path) for step, path in checkpoints if step in wanted]
+        print(f"[INFO] only_steps={sorted(wanted)}: evaluating {len(checkpoints)} checkpoints")
+
     # Smoke test: only evaluate one checkpoint and one case before full sweep
     # Use --smoke_test flag to enable
     if args.smoke_test:
@@ -379,6 +414,7 @@ def main():
         print(f"\n[{checkpoint_idx+1}/{len(checkpoints)}] Checkpoint {step:,} steps")
         
         checkpoint_metrics = defaultdict(list)
+        failed_cases = []
         
         for case in cases:
             # Create unique output dir for this checkpoint/case
@@ -396,6 +432,7 @@ def main():
                 target_speed_mps=args.target_speed_mps,
                 ownship_speed_mps=args.ownship_speed_mps,
                 sim_time=args.sim_time,
+                timeout_s=args.eval_timeout,
             )
             
             if metrics:
@@ -405,7 +442,12 @@ def main():
                         checkpoint_metrics[key].append(val)
             else:
                 print("✗ FAILED")
+                failed_cases.append(case)
         
+        if failed_cases:
+            print(f"[WARN] Checkpoint {step:,} incomplete. Failed cases: {failed_cases}")
+            continue
+
         # Aggregate across all cases for this checkpoint
         if checkpoint_metrics:
             agg_metrics = {
@@ -473,6 +515,7 @@ def main():
             print(f"\nFull eval: Checkpoint {step:,} steps (100 seeds/case)")
             
             checkpoint_metrics = defaultdict(list)
+            failed_cases = []
             
             for case in cases:
                 eval_output_dir = str(training_dir / f"eval_cp{step}_case{case}_full")
@@ -489,6 +532,7 @@ def main():
                     target_speed_mps=args.target_speed_mps,
                     ownship_speed_mps=args.ownship_speed_mps,
                     sim_time=args.sim_time,
+                    timeout_s=args.eval_timeout,
                 )
                 
                 if metrics:
@@ -498,7 +542,12 @@ def main():
                             checkpoint_metrics[key].append(val)
                 else:
                     print("✗ FAILED")
+                    failed_cases.append(case)
             
+            if failed_cases:
+                print(f"[WARN] Checkpoint {step:,} incomplete. Failed cases: {failed_cases}")
+                continue
+
             if checkpoint_metrics:
                 agg_metrics = {
                     key: float(np.mean(vals)) for key, vals in checkpoint_metrics.items()
@@ -542,7 +591,7 @@ def main():
     n_acceptable = int(df_ranked['acceptable'].sum())
     print("=" * 80)
     print(f"CHECKPOINT RANKING  ({n_acceptable}/{len(df_ranked)} acceptable)")
-    print("  Acceptable = collision_rate==0.0 AND success_rate==1.0")
+    print("  Acceptable = collision_rate==0.0 AND success_rate==1.0 AND near_miss_rate==0.0")
     print("  Ranked by: risk_exposure asc → min_sep_m desc → completion_time asc")
     print("=" * 80)
     print()

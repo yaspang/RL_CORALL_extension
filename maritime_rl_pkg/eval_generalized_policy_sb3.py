@@ -116,7 +116,7 @@ def parse_args():
     p.add_argument(
         "--sim_time",
         type=float,
-        default=1950.0,
+        default=900.0,
         help="Episode length (seconds)"
     )
     p.add_argument(
@@ -265,6 +265,7 @@ def run_one_episode(model, env, seed, args, capture_history=False):
         "risk_exposure_ownship": float(ownship_metrics.get("risk_exposure", 0.0)),
         "completion_time_s_ownship": float(ownship_metrics.get("completion_time_s", np.inf)),
         "goal_progress_ownship": float(ownship_metrics.get("goal_progress", 0.0)),
+        "near_miss_ownship": int(ownship_metrics.get("near_miss", 0)),
     }
     
     return metrics, history
@@ -305,6 +306,7 @@ def evaluate_policy(args):
         num_seeds=10000,
         dt=args.dt,
         sim_time=args.sim_time,
+        n_speed=5,
         route_len_nmi=args.route_len_nmi,
         master_seed=None,
         desired_cross_x_nmi=args.desired_cross_x_nmi,

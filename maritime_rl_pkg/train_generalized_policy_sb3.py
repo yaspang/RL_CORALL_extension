@@ -274,7 +274,7 @@ class GeneralizedTrainingMetricsCallback(BaseCallback):
                 if not self._curriculum_logged:
                     print(f"\n[+] Curriculum learning ACTIVE - update_step() successfully called", flush=True)
                     print(f"  Base env: {type(base_env).__name__}", flush=True)
-                    print(f"  Training will progress: 2-ship (0-500k) -> 2/3-ship (500k-1M) -> 2/3/4-ship (1M+)\n", flush=True)
+                    print(f"  Stochastic mixed curriculum: 0-250k (80/15/5%) -> 250k-750k (60/30/10%) -> 750k+ (40/40/20%)\n", flush=True)
                     self._curriculum_logged = True
                     sys.stdout.flush()
                     
@@ -613,6 +613,10 @@ def main():
                         help="Enable hard-case oversampling (50% curriculum, 30% hard Imazu cases, 20% easy cases)")
     parser.add_argument("--hard_case_pool_file", type=str, default=None,
                         help="Path to JSON file tracking failed (case, seed) pairs for failure replay")
+    parser.add_argument("--hard_cases", type=int, nargs="+", default=None,
+                        help="Override which Imazu cases are treated as hard for oversampling (e.g. --hard_cases 11 12 13 16 17 19)")
+    parser.add_argument("--resume_from", type=str, default=None,
+                        help="Path to a .zip checkpoint to warm-start from (policy weights only; optimizer is reset for fine-tuning)")
     parser.add_argument("--use_procedural_encounters", action="store_true",
                         help="Use procedurally generated random encounters instead of canonical Imazu cases (1-22)")
     parser.add_argument("--sim_time", type=float, default=900.0,
@@ -629,11 +633,13 @@ def main():
     print(f"\nConfiguration:")
     if args.use_procedural_encounters:
         print(f"  Encounter mode:            PROCEDURAL (random generation)")
-        print(f"    - Phase 1 (0-1M steps): 2-agent scenarios")
-        print(f"    - Phase 2 (1M-2M steps): 2-3 agent scenarios")
-        print(f"    - Phase 3 (2M+ steps): 2-4 agent scenarios")
+        print(f"    - Stochastic mixed curriculum (active from step 0):")
+        print(f"        0-250k  :  80% one target, 15% two targets,  5% three targets")
+        print(f"        250k-750k: 60% one target, 30% two targets, 10% three targets")
+        print(f"        750k+  :  40% one target, 40% two targets, 20% three targets")
         print(f"    - Target speed range: {6.0}-{14.0} m/s")
-        print(f"    - Ownship speed range: {9.0}-{12.0} m/s")
+        print(f"    - Ownship nominal speed: {args.ownship_speed_mps if args.ownship_speed_mps else 10.0} m/s")
+        print(f"    - Ownship speed action bins (m/s): [7.0, 8.25, 9.5, 10.75, 12.0]")
     else:
         print(f"  Encounter mode:            CANONICAL Imazu cases")
         print(f"  Cases to train on:         {args.cases}")
@@ -651,8 +657,10 @@ def main():
     print(f"  MLP architecture:          {args.mlp_hiddens}")
     print(f"  Hard-case oversampling:    {'ENABLED' if args.hard_case_oversampling else 'disabled'}")
     if args.hard_case_oversampling:
-        print(f"    - 50% curriculum, 30% hard cases (13,18,20,21), 20% easy cases")
+        hard_cases_display = args.hard_cases if args.hard_cases else [13, 18, 20, 21]
+        print(f"    - Hard cases:          {hard_cases_display}")
         print(f"    - Hard case pool file: {args.hard_case_pool_file if args.hard_case_pool_file else '(none, will use defaults)'}")
+    print(f"  Resume from checkpoint:    {args.resume_from if args.resume_from else 'none (train from scratch)'}")
     print(f"\nOutput directory:            {output_dir}")
     print(f"Timestamp:                   {timestamp}")
     print("=" * 80 + "\n")
@@ -670,6 +678,7 @@ def main():
                 dt=0.5,
                 sim_time=args.sim_time,
                 n_heading=7,
+                n_speed=5,
                 max_heading_change_deg=25.0,
                 loa_m=30.0,
                 route_len_nmi=2.0,
@@ -683,6 +692,7 @@ def main():
                 dt=0.5,
                 sim_time=args.sim_time,
                 n_heading=7,
+                n_speed=5,
                 max_heading_change_deg=25.0,
                 loa_m=30.0,
                 route_len_nmi=2.0,
@@ -693,6 +703,7 @@ def main():
                 enable_curriculum=True,  # Enable curriculum by agent count (2-ship -> 3-ship -> 4-ship)
                 hard_case_oversampling=args.hard_case_oversampling,
                 hard_case_pool_file=args.hard_case_pool_file,
+                hard_cases=args.hard_cases,
             )
         
         
@@ -716,24 +727,52 @@ def main():
             "activation_fn": nn.Tanh,
         }
         
-        model = PPO(
-            "MlpPolicy",
-            env,
-            learning_rate=args.lr,
-            n_steps=args.rollout_frag,
-            batch_size=args.train_batch,
-            n_epochs=10,
-            gamma=args.gamma,
-            gae_lambda=0.95,
-            clip_range=0.2,
-            ent_coef=0.005,
-            vf_coef=0.5,
-            max_grad_norm=0.5,
-            use_sde=False,
-            policy_kwargs=policy_kwargs,
-            verbose=1,
-            device="auto",
-        )
+        if args.resume_from:
+            # Fine-tuning: load policy weights from checkpoint, reset optimizer for clean LR
+            print(f"[Fine-tune] Loading policy weights from: {args.resume_from}")
+            pretrained = PPO.load(args.resume_from, env=env, device="auto")
+            # Create fresh model with new hyperparameters (new optimizer, same architecture)
+            model = PPO(
+                "MlpPolicy",
+                env,
+                learning_rate=args.lr,
+                n_steps=args.rollout_frag,
+                batch_size=args.train_batch,
+                n_epochs=10,
+                gamma=args.gamma,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.005,
+                vf_coef=0.5,
+                max_grad_norm=0.5,
+                use_sde=False,
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                device="auto",
+            )
+            # Copy only the policy network weights (not optimizer state)
+            model.policy.load_state_dict(pretrained.policy.state_dict())
+            print(f"[Fine-tune] Policy weights loaded. Optimizer reset. LR = {args.lr}")
+            del pretrained
+        else:
+            model = PPO(
+                "MlpPolicy",
+                env,
+                learning_rate=args.lr,
+                n_steps=args.rollout_frag,
+                batch_size=args.train_batch,
+                n_epochs=10,
+                gamma=args.gamma,
+                gae_lambda=0.95,
+                clip_range=0.2,
+                ent_coef=0.005,
+                vf_coef=0.5,
+                max_grad_norm=0.5,
+                use_sde=False,
+                policy_kwargs=policy_kwargs,
+                verbose=1,
+                device="auto",
+            )
         
         # Callbacks
         checkpoint_callback = CheckpointCallback(
@@ -834,6 +873,16 @@ def main():
             "desired_cross_x_nmi": args.desired_cross_x_nmi,
             "target_speed_mps": args.target_speed_mps,
             "ownship_speed_mps": args.ownship_speed_mps,
+            "use_procedural_encounters": args.use_procedural_encounters,
+            "n_heading": 7,
+            "n_speed": 5,
+            "speed_options_mps": [7.0, 8.25, 9.5, 10.75, 12.0],
+            "curriculum_type": "stochastic_mixed",
+            "curriculum_phases": {
+                "0":      [0.80, 0.15, 0.05],
+                "250000": [0.60, 0.30, 0.10],
+                "750000": [0.40, 0.40, 0.20],
+            },
             "sim_time": args.sim_time,
             "dt": 0.5,
             "route_len_nmi": 2.0,

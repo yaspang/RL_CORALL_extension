@@ -84,6 +84,7 @@ class RandomCaseEnv(gym.Wrapper):
         dt: float = 0.5,
         sim_time: float = 500.0,
         n_heading: int = 7,
+        n_speed: int = 5,
         max_heading_change_deg: float = 25.0,
         loa_m: float = 30.0,
         route_len_nmi: float = 2.0,
@@ -94,6 +95,7 @@ class RandomCaseEnv(gym.Wrapper):
         enable_curriculum: bool = True,
         hard_case_oversampling: bool = False,
         hard_case_pool_file: Optional[str] = None,
+        hard_cases: Optional[List[int]] = None,
     ):
         # Create initial environment (case doesn't matter, will be randomized at reset)
         base_env = SingleAgentOwnshipEnv(
@@ -101,6 +103,7 @@ class RandomCaseEnv(gym.Wrapper):
             dt=dt,
             sim_time=sim_time,
             n_heading=n_heading,
+            n_speed=n_speed,
             max_heading_change_deg=max_heading_change_deg,
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
@@ -116,6 +119,7 @@ class RandomCaseEnv(gym.Wrapper):
         self.dt = float(dt)
         self.sim_time = float(sim_time)
         self.n_heading = int(n_heading)
+        self.n_speed = int(n_speed)
         self.max_heading_change_deg = float(max_heading_change_deg)
         self.loa_m = float(loa_m)
         self.route_len_nmi = float(route_len_nmi)
@@ -133,6 +137,8 @@ class RandomCaseEnv(gym.Wrapper):
         # Hard-case oversampling (failure replay)
         self.hard_case_oversampling = hard_case_oversampling
         self.hard_case_pool_file = hard_case_pool_file
+        # Allow caller to override which cases are treated as hard (default: class-level HARD_CASES)
+        self._hard_cases = list(hard_cases) if hard_cases is not None else list(self.HARD_CASES)
         self.hard_case_pool: Dict[int, Set[int]] = {}  # {case: {seed1, seed2, ...}}
         self.failure_case_seed_pairs: Set[Tuple[int, int]] = set()  # (case, seed) pairs that failed
         
@@ -142,7 +148,7 @@ class RandomCaseEnv(gym.Wrapper):
         
         # Initialize hard case pool with known problem cases
         if hard_case_oversampling and not self.hard_case_pool:
-            for case in self.HARD_CASES:
+            for case in self._hard_cases:
                 if case in self.cases_to_train:
                     self.hard_case_pool[case] = set(range(self.num_seeds))  # All seeds initially available
         
@@ -169,7 +175,7 @@ class RandomCaseEnv(gym.Wrapper):
                 # Convert list of dicts to {case: set(seeds)}
                 self.hard_case_pool = {
                     int(case): set(pool_data.get(str(case), list(range(self.num_seeds))))
-                    for case in self.HARD_CASES
+                    for case in self._hard_cases
                     if int(case) in self.cases_to_train
                 }
                 print(f"[HardCaseOversampling] Loaded pool from {pool_file}: {len(self.hard_case_pool)} cases")
@@ -398,6 +404,7 @@ class RandomCaseEnv(gym.Wrapper):
             dt=self.dt,
             sim_time=self.sim_time,
             n_heading=self.n_heading,
+            n_speed=self.n_speed,
             max_heading_change_deg=self.max_heading_change_deg,
             loa_m=self.loa_m,
             route_len_nmi=self.route_len_nmi,
@@ -430,8 +437,8 @@ class RandomCaseEnv(gym.Wrapper):
         # Get curriculum cases
         curriculum_cases = self._get_curriculum_available_cases()
         
-        # Get hard cases (intersection of HARD_CASES with cases_to_train)
-        hard_cases_available = [c for c in self.HARD_CASES if c in self.cases_to_train]
+        # Get hard cases (intersection of _hard_cases with cases_to_train)
+        hard_cases_available = [c for c in self._hard_cases if c in self.cases_to_train]
         
         # Add dynamically tracked failures to hard pool
         for case, seeds in self.hard_case_pool.items():

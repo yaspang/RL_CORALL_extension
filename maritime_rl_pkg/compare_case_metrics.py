@@ -77,6 +77,29 @@ def load_episode_histories(eval_dir: Path) -> List[Dict]:
     return histories
 
 
+def summarize_csv(eval_dir: Path) -> dict:
+    """Aggregate per-episode CSV metrics for an eval directory (reads seed_0/policy_eval_per_episode.csv)."""
+    csv_path = eval_dir / "seed_0" / "policy_eval_per_episode.csv"
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path)
+    return {
+        "collision_rate":     df["collision_any"].mean()             if "collision_any"            in df.columns else np.nan,
+        "success_rate":       df["success_ownship"].mean()           if "success_ownship"          in df.columns else np.nan,
+        "min_sep_m":          df["min_actual_sep_m_ownship"].mean()  if "min_actual_sep_m_ownship" in df.columns else np.nan,
+        "min_sep_m_std":      df["min_actual_sep_m_ownship"].std()   if "min_actual_sep_m_ownship" in df.columns else np.nan,
+        "risk_exposure":      df["risk_exposure_ownship"].mean()     if "risk_exposure_ownship"    in df.columns else np.nan,
+        "risk_exposure_std":  df["risk_exposure_ownship"].std()      if "risk_exposure_ownship"    in df.columns else np.nan,
+        "path_length_m":      df["path_length_m_ownship"].mean()     if "path_length_m_ownship"    in df.columns else np.nan,
+        "path_length_m_std":  df["path_length_m_ownship"].std()      if "path_length_m_ownship"    in df.columns else np.nan,
+        "time_s":             df["completion_time_s_ownship"].mean() if "completion_time_s_ownship" in df.columns else np.nan,
+        "time_s_std":         df["completion_time_s_ownship"].std()  if "completion_time_s_ownship" in df.columns else np.nan,
+        "near_miss_rate":     df["near_miss_ownship"].mean()         if "near_miss_ownship"        in df.columns else (
+                              df["near_miss_any"].mean()             if "near_miss_any"            in df.columns else np.nan),
+        "n_episodes":         len(df),
+    }
+
+
 def compute_distance_traveled(X_all: np.ndarray, agent_idx: int = 0) -> float:
     """
     Compute total distance traveled by agent as sum of Euclidean distances
@@ -325,6 +348,29 @@ def aggregate_case_metrics(
         except Exception as e:
             print(f"    Warning: Could not load RL CSV: {e}")
 
+    # === Fallback: populate RL scalar metrics from CSV when no NPZ episode histories ===
+    rl_n_episodes_csv = 0
+    if not rl_hists:
+        _csv = summarize_csv(rl_dir)
+        if _csv:
+            rl_n_episodes_csv = int(_csv.get("n_episodes", 0))
+            if np.isnan(rl_min_sep_avg):
+                rl_min_sep_avg = _csv.get("min_sep_m", np.nan) / NMI
+                rl_min_sep_std = _csv.get("min_sep_m_std", np.nan) / NMI
+            if np.isnan(rl_risk_avg):
+                rl_risk_avg = _csv.get("risk_exposure", np.nan)
+                rl_risk_std = _csv.get("risk_exposure_std", np.nan)
+            if np.isnan(rl_dist_avg):
+                rl_dist_avg = _csv.get("path_length_m", np.nan)
+                rl_dist_std = _csv.get("path_length_m_std", np.nan)
+            if np.isnan(rl_time_avg):
+                rl_time_avg = _csv.get("time_s", np.nan)
+                rl_time_std = _csv.get("time_s_std", np.nan)
+            if np.isnan(rl_collision_rate):
+                rl_collision_rate = _csv.get("collision_rate", np.nan)
+            if np.isnan(rl_success_rate):
+                rl_success_rate = _csv.get("success_rate", np.nan)
+
     return {
         'case': case_num,
         'n_agents': n_agents,
@@ -350,19 +396,31 @@ def aggregate_case_metrics(
         'baseline_success_rate': baseline_success_rate,
         'rl_success_rate': rl_success_rate,
         'n_episodes_baseline': len(baseline_distances),
-        'n_episodes_rl': len(rl_distances),
+        'n_episodes_rl': rl_n_episodes_csv if rl_n_episodes_csv > 0 else len(rl_distances),
     }
 
 
-def find_eval_directories(base_dir: Path, case_numbers: List[int]) -> Tuple[List[Path], List[Path]]:
-    """Find baseline and RL evaluation directories for given cases"""
+def find_eval_directories(
+    base_dir: Path,
+    case_numbers: List[int],
+    rl_dir: Path = None,
+    rl_step: int = None,
+) -> Tuple[List[Path], List[Path]]:
+    """Find baseline and RL evaluation directories for given cases.
+
+    Args:
+        base_dir:     Root directory searched for baseline dirs (and legacy RL dirs).
+        case_numbers: Cases to include.
+        rl_dir:       If provided, scan this directory for eval_cp*/policy_eval* RL dirs.
+        rl_step:      If provided with rl_dir, only include dirs whose step number matches.
+    """
     baseline_dirs = []
     rl_dirs = []
-    
+
     for item in base_dir.iterdir():
         if not item.is_dir():
             continue
-        
+
         # Match baseline directories (corall_baseline_case* pattern)
         if "corall_baseline_case" in item.name:
             match = re.search(r"corall_baseline_case(\d+)", item.name)
@@ -373,13 +431,37 @@ def find_eval_directories(base_dir: Path, case_numbers: List[int]) -> Tuple[List
             match = re.search(r"baseline_case(\d+)", item.name)
             if match and int(match.group(1)) in case_numbers:
                 baseline_dirs.append(item)
-        
-        # Match RL evaluation directories
+
+        # Legacy RL eval dirs: policy_eval*sb3* inside base_dir
         elif "policy_eval" in item.name and "sb3" in item.name:
             match = re.search(r"case(\d+)", item.name)
             if match and int(match.group(1)) in case_numbers:
                 rl_dirs.append(item)
-    
+
+        # Ranker-style eval_cp* dirs directly inside base_dir (when no dedicated rl_dir given)
+        elif rl_dir is None and item.name.startswith("eval_cp") and "case" in item.name:
+            match = re.search(r"case(\d+)", item.name)
+            if match and int(match.group(1)) in case_numbers:
+                if rl_step is not None:
+                    step_match = re.search(r"eval_cp(\d+)_", item.name)
+                    if not step_match or int(step_match.group(1)) != rl_step:
+                        continue
+                rl_dirs.append(item)
+
+    # If a dedicated RL directory is provided, scan it for eval_cp* dirs
+    if rl_dir is not None and rl_dir.exists():
+        for item in rl_dir.iterdir():
+            if not item.is_dir():
+                continue
+            if item.name.startswith("eval_cp") and "case" in item.name:
+                match = re.search(r"case(\d+)", item.name)
+                if match and int(match.group(1)) in case_numbers:
+                    if rl_step is not None:
+                        step_match = re.search(r"eval_cp(\d+)_", item.name)
+                        if not step_match or int(step_match.group(1)) != rl_step:
+                            continue
+                    rl_dirs.append(item)
+
     return baseline_dirs, rl_dirs
 
 
@@ -984,18 +1066,30 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare RL vs Baseline metrics across cases")
-    parser.add_argument('--base_dir', type=Path, default=Path('.'), 
-                       help='Base directory containing eval directories')
+    parser.add_argument('--base_dir', type=Path, default=Path('.'),
+                       help='Base directory searched for baseline dirs (corall_baseline_case*)')
+    parser.add_argument('--rl_dir', type=Path, default=None,
+                       help='Training directory with eval_cp*_case* subdirs '
+                            '(e.g. GENERALIZED_SB3_20260716-130847). '
+                            'If omitted, eval_cp* dirs inside --base_dir are used.')
+    parser.add_argument('--rl_step', type=int, default=None,
+                       help='Checkpoint step to compare (e.g. 850000). '
+                            'Filters eval_cp<step>_case* dirs in --rl_dir.')
     parser.add_argument('--case_numbers', nargs='+', type=int, default=[1, 6, 21],
                        help='Case numbers to compare')
     parser.add_argument('--output_dir', type=Path, default=Path('comparison_results'),
                        help='Output directory for charts and CSV')
-    
+
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    
-    print(f"\nSearching for evaluation directories in {args.base_dir}")
-    baseline_dirs, rl_dirs = find_eval_directories(args.base_dir, args.case_numbers)
+
+    rl_src = args.rl_dir or args.base_dir
+    step_str = f" (step {args.rl_step})" if args.rl_step else ""
+    print(f"\nSearching for baseline dirs in: {args.base_dir}")
+    print(f"Searching for RL eval dirs in:  {rl_src}{step_str}")
+    baseline_dirs, rl_dirs = find_eval_directories(
+        args.base_dir, args.case_numbers, rl_dir=args.rl_dir, rl_step=args.rl_step
+    )
     
     print(f"Found {len(baseline_dirs)} baseline and {len(rl_dirs)} RL eval directories")
     

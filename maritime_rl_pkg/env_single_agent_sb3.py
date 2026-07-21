@@ -97,7 +97,7 @@ class SingleAgentOwnshipEnv(gym.Env):
         render_mode: Optional[str] = None,
         # action discretization
         n_heading: int = 7,
-        #n_speed: int = 5,
+        n_speed: int = 5,
         max_heading_change_deg: float = 25.0,
         #u_min: float = 5.0,
         #u_max: float = 10.0,
@@ -123,6 +123,7 @@ class SingleAgentOwnshipEnv(gym.Env):
             sim_time=sim_time,
             render_mode=render_mode,
             n_heading=n_heading,
+            n_speed=n_speed,
             max_heading_change_deg=max_heading_change_deg,
             loa_m=loa_m,
             route_len_nmi=route_len_nmi,
