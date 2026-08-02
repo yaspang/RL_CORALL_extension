@@ -508,6 +508,7 @@ class MultiShipParallelEnv(ParallelEnv):
                 "success": 0,
                 "completion_time_s": np.nan,
                 "min_actual_sep_m": float("inf"),
+                "min_dcpa_m": float("inf"),
                 "near_miss": 0,
                 "goal_progress": 0.0,
                 "goal_passed": 0,
@@ -978,6 +979,22 @@ class MultiShipParallelEnv(ParallelEnv):
             dcpa_vals = pair_dcpa[k].copy()
             dcpa_vals[k] = np.inf  # exclude self
             min_dcpa_abs = float(np.min(dcpa_vals[np.isfinite(dcpa_vals)])) if np.any(np.isfinite(dcpa_vals)) else float("inf")
+
+            # Track episode-minimum DCPA using encounter-filtered absolute values
+            # (same convention as baseline: active encounter < 3 nmi, abs value, clip 5 nmi, filter < 10m)
+            dist_vals_ep = pair_dist[k].copy()
+            in_encounter_ep = (dist_vals_ep > 0) & (dist_vals_ep <= 3.0 * NMI)
+            valid_ep = (np.arange(len(dcpa_vals)) != k) & np.isfinite(dcpa_vals) & in_encounter_ep
+            if np.any(valid_ep):
+                abs_dcpa_ep = np.abs(dcpa_vals[valid_ep])
+                abs_dcpa_ep = abs_dcpa_ep[abs_dcpa_ep >= 10.0]  # filter numerical artifacts
+                min_dcpa_ep = min(float(np.min(abs_dcpa_ep)), 5.0 * NMI) if len(abs_dcpa_ep) > 0 else LOA * 4.0
+            else:
+                min_dcpa_ep = LOA * 4.0  # no active encounter
+            if not agent_already_done:
+                self.episode_metrics[agent]["min_dcpa_m"] = min(
+                    self.episode_metrics[agent]["min_dcpa_m"], min_dcpa_ep
+                )
 
             infos[agent]["t"] = self.t
 

@@ -23,7 +23,11 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=0, help="Number of parallel workers to use for evaluation (default: 0 for standalone eval)")
     p.add_argument("--render", action="store_true", help="Whether to render the environment during evaluation")
     p.add_argument("--save_histories", action="store_true", help="Save per-step state histories for all episodes")
-    p.add_argument("--save_first_history", action="store_true", help="Save only the first episode history (useful for overlay figures)")
+    p.add_argument("--no_first_history", action="store_true",
+                   help="Skip the default first-episode history save (no NPZ written unless --save_histories)")
+    p.add_argument("--output_dir", type=str, default=None,
+                   help="Override output base directory name (default: corall_baseline_case{N}_{timestamp}). "
+                        "Useful for batch runs to keep results under a fixed folder name.")
     p.add_argument("--desired_cross_x_nmi", type=float, default=1.0)
     p.add_argument("--target_speed_mps", type=float, default=10.0)
     p.add_argument("--ownship_speed_mps", type=float, default=None)
@@ -207,17 +211,19 @@ def run_one_episode_baseline(env_creator, seed, args, capture_history=False):
 def main():
     args = parse_args()
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    output_dir = Path(f"corall_baseline_case{args.case}_{timestamp}") / f"seed_{args.seed}"
+    base_name = args.output_dir if args.output_dir else f"corall_baseline_case{args.case}_{timestamp}"
+    output_dir = Path(base_name) / f"seed_{args.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
     histories_dir = output_dir / "episode_histories"
-    histories_dir.mkdir(parents=True, exist_ok=True)
+    if args.save_histories or not args.no_first_history:
+        histories_dir.mkdir(parents=True, exist_ok=True)
 
     env_creator = build_env_creator(args)
     per_episode_results = []
 
     for ep in range(args.episodes):
         ep_seed = args.seed + ep  
-        capture_history = bool(args.save_histories or (args.save_first_history and ep == 0))
+        capture_history = bool(args.save_histories or (ep == 0 and not args.no_first_history))
         row, history = run_one_episode_baseline(env_creator, seed=ep_seed, args=args, capture_history=capture_history)
         row["episode_index"] = ep
         row["episode_seed"] = ep_seed

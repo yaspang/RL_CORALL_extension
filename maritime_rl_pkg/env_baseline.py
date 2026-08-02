@@ -411,7 +411,12 @@ class CORALLComparisonEnv(ParallelEnv):
                     xb, yb, xb_prev, yb_prev,
                     self.dt,
                 )
-            risk = float(risk_calculations(dcpa, tcpa, dist, vrel))
+            risk = float(risk_calculations(
+                dcpa / NMI,       # meters → nautical miles
+                tcpa / 3600.0,    # seconds → hours
+                dist / NMI,       # meters → nautical miles
+                vrel,
+            ))
 
             self.pair_dcpa[a, b] = self.pair_dcpa[b, a] = float(dcpa)
             self.pair_tcpa[a, b] = self.pair_tcpa[b, a] = float(tcpa)
@@ -612,7 +617,8 @@ class CORALLComparisonEnv(ParallelEnv):
         else:
             final_reached = final_waypoint_reached_by_index
             
-        if final_reached:
+        safe_final_reached = final_reached and self.episode_metrics[agent]["collision"] == 0
+        if safe_final_reached:
             infos[agent]["success"] = True
             self.episode_metrics[agent]["success"] = 1
             self.episode_metrics[agent]["goal_passed"] = 1

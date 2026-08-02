@@ -160,6 +160,56 @@ def parse_args():
         default=None,
         help="Optional output directory for evaluation results"
     )
+
+    # ── Stage-1 LLM intent logging ──────────────────────────────────────────
+    p.add_argument(
+        "--llm",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable LLM intent logging alongside the RL policy (Stage 1: "
+            "logging only — the PPO policy is unchanged). "
+            "Requires OPENAI_API_KEY or CLAUDE_API_KEY in environment / "
+            "third_party/CORALL/.env. "
+            "NOTE: LLM API calls add ~1-5 s per call. For large episode "
+            "counts use --llm_interval 60 or --episodes 1."
+        ),
+    )
+    p.add_argument(
+        "--llm_rule_only",
+        action="store_true",
+        default=False,
+        help=(
+            "Log COLREGs rule classifications at each decision interval "
+            "without making LLM API calls (fast, no API key required). "
+            "Implies --llm behaviour except the LLM text column is omitted."
+        ),
+    )
+    p.add_argument(
+        "--llm_provider",
+        type=str,
+        default=None,
+        choices=["openai", "claude"],
+        help="LLM provider for --llm mode. Reads LLM_PROVIDER env var if not set.",
+    )
+    p.add_argument(
+        "--llm_interval",
+        type=float,
+        default=30.0,
+        help="Interval between LLM decision queries in simulation seconds (default 30 s).",
+    )
+    p.add_argument(
+        "--llm_env_file",
+        type=str,
+        default=None,
+        help=(
+            "Explicit path to the .env file that holds LLM API keys "
+            "(e.g. third_party/CORALL/.env). "
+            "When omitted the loader searches third_party/CORALL/.env then "
+            "the workspace root .env in that order."
+        ),
+    )
+
     return p.parse_args()
 
 
@@ -204,55 +254,67 @@ def append_history(history, env):
     history["pair_tcpa"].append(multi_env.pair_tcpa.copy())
 
 
-def run_one_episode(model, env, seed, args, capture_history=False):
+def run_one_episode(model, env, seed, args, capture_history=False,
+                    llm_logger=None, episode_idx=0):
     """
     Run a single deterministic evaluation episode.
-    
-    Returns:
-        metrics: dict of episode metrics
-        history: dict of per-step states (or None if not captured)
+
+    Parameters
+    ----------
+    llm_logger : LLMIntentLogger or None
+        When supplied, calls ``llm_logger.log_step()`` at each decision
+        interval.  The RL policy is NOT affected (Stage 1: logging only).
+    episode_idx : int
+        Zero-based episode index written into LLM log records.
+
+    Returns
+    -------
+    metrics : dict
+    history : dict or None
     """
     obs, info = env.reset(seed=seed)
-    
+
     history = init_history(env, seed, args) if capture_history else None
-    
+
+    # Cache multi-agent env reference once (object is stable across steps)
+    _multi_env = env.env_multi if hasattr(env, 'env_multi') else env.env.env_multi
+
     episode_return = 0.0
     step = 0
     done = False
-    
+
     while not done and step < int(args.sim_time / args.dt):
         # Predict action (deterministic = no exploration)
         action, _ = model.predict(obs, deterministic=True)
-        
+
         obs, reward, terminated, truncated, info = env.step(action)
         episode_return += float(reward)
-        
+
         if capture_history:
             append_history(history, env)
-        
+
+        # Stage-1 LLM intent logging (observer only — does not alter action)
+        if llm_logger is not None and llm_logger.should_log(step):
+            llm_logger.log_step(
+                step=step,
+                time_s=float(_multi_env.t),
+                episode_idx=episode_idx,
+                episode_seed=seed,
+                multi_env=_multi_env,
+            )
+
         done = terminated or truncated
         step += 1
     
     # Extract ownship metrics (unwrap: RandomCaseEnv -> SingleAgentOwnshipEnv)
     unwrapped_env = env.env if hasattr(env, 'env') else env
     ownship_metrics = unwrapped_env.get_ownship_metrics()
-    pairwise = unwrapped_env.get_pairwise_geometry()
     
-    # Compute DCPA from all agents
-    multi_env = env.env_multi if hasattr(env, 'env_multi') else env.env.env_multi
-    if multi_env.n_agents > 1:
-        dcpa_vals = pairwise["pair_dcpa"][0, 1:]  # DCPA with each obstacle
-        abs_dcpa = np.abs(dcpa_vals[np.isfinite(dcpa_vals)])
-        # Filter out numerical artifacts (DCPA < 10m likely from rounding errors)
-        abs_dcpa = abs_dcpa[abs_dcpa >= 10.0]
-        if len(abs_dcpa) > 0:
-            ownship_dcpa = float(np.min(abs_dcpa))
-        else:
-            # Fallback if all values below 10m threshold
-            ownship_dcpa = multi_env.LOA_own * 4.0
-    else:
-        ownship_dcpa = np.inf
-    
+    # Read episode-minimum DCPA from tracked episode_metrics (running min over encounter-filtered
+    # steps, same convention as baseline).  The old post-episode pairwise snapshot is unreliable
+    # because the encounter is resolved by the time the episode ends.
+    ownship_dcpa = float(ownship_metrics.get("min_dcpa_m", np.inf))
+
     metrics = {
         "episode_return": float(episode_return),
         "episode_steps": int(step),
@@ -274,6 +336,7 @@ def run_one_episode(model, env, seed, args, capture_history=False):
 def evaluate_policy(args):
     """Main evaluation loop."""
     from maritime_rl_pkg.env_single_agent_sb3 import SingleAgentOwnshipEnv
+    from maritime_rl_pkg.llm_intent_logger import LLMIntentLogger
     
     # Load checkpoint
     print(f"\n{'='*70}")
@@ -326,19 +389,47 @@ def evaluate_policy(args):
     histories_dir = seed_dir / "episode_histories"
     if args.save_histories or args.save_first_history:
         histories_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # ── Stage-1 LLM intent logger (logging only, does not affect policy) ────
+    _use_llm_logging = getattr(args, "llm", False) or getattr(args, "llm_rule_only", False)
+    llm_logger = None
+    if _use_llm_logging:
+        from maritime_rl_pkg.llm_intent_logger import load_env_file
+        # Load .env for API keys before constructing MultiLLMCOLREGSInterpreter.
+        # Mirrors the original CORALL load_env_file() call in simulation.py.
+        if getattr(args, "llm", False):
+            found = load_env_file(env_path=getattr(args, "llm_env_file", None))
+            if not found:
+                print(
+                    "[WARN] No .env file found. Set OPENAI_API_KEY / CLAUDE_API_KEY "
+                    "as environment variables, or use --llm_env_file to point to "
+                    "your .env (e.g. --llm_env_file third_party/CORALL/.env)."
+                )
+        llm_logger = LLMIntentLogger(
+            use_llm=getattr(args, "llm", False),
+            provider=getattr(args, "llm_provider", None),
+            interval_s=getattr(args, "llm_interval", 30.0),
+            dt=args.dt,
+            env_file=getattr(args, "llm_env_file", None),
+        )
+
     # Run episodes
     per_episode_results = []
-    
+
     for ep in range(args.episodes):
         ep_seed = args.seed + ep
         capture_hist = bool(args.save_histories or (args.save_first_history and ep == 0))
-        
-        metrics, history = run_one_episode(model, env, ep_seed, args, capture_history=capture_hist)
+
+        metrics, history = run_one_episode(
+            model, env, ep_seed, args,
+            capture_history=capture_hist,
+            llm_logger=llm_logger,
+            episode_idx=ep,
+        )
         metrics["episode_index"] = ep
         metrics["episode_seed"] = ep_seed
         per_episode_results.append(metrics)
-        
+
         # Save episode history
         if history is not None:
             hist_path = histories_dir / f"case{args.case}_seed{ep_seed}_ep{ep:03d}.npz"
@@ -347,9 +438,9 @@ def evaluate_policy(args):
         else:
             print(f"[{ep+1:3d}/{args.episodes}] return={metrics['episode_return']:8.2f}, "
                   f"collision={metrics['collision_any']}, success={metrics['success_ownship']:.0f}")
-    
+
     env.close()
-    
+
     # Save per-episode CSV
     csv_path = seed_dir / "policy_eval_per_episode.csv"
     if per_episode_results:
@@ -359,7 +450,12 @@ def evaluate_policy(args):
             writer.writeheader()
             writer.writerows(per_episode_results)
         print(f"\n[OK] Per-episode results saved to: {csv_path}")
-    
+
+    # Save LLM intent log if populated
+    if llm_logger is not None and len(llm_logger) > 0:
+        llm_log_path = seed_dir / "llm_intent_log.csv"
+        llm_logger.save(llm_log_path)
+
     # Aggregate results
     agg_results = {}
     for key in per_episode_results[0].keys():
@@ -377,7 +473,26 @@ def evaluate_policy(args):
     agg_results["best_return_episode_idx"] = int(best_ep_idx)
     agg_results["best_return_episode_seed"] = int(best_seed)
     agg_results["best_return_value"] = float(best_ep["episode_return"])
-    
+
+    # Attach eval configuration for reproducibility
+    agg_results["eval_config"] = {
+        "checkpoint":          str(args.checkpoint),
+        "case":                int(args.case),
+        "episodes":            int(args.episodes),
+        "seed":                int(args.seed),
+        "dt":                  float(args.dt),
+        "sim_time":            float(args.sim_time),
+        "route_len_nmi":       float(args.route_len_nmi),
+        "desired_cross_x_nmi": float(args.desired_cross_x_nmi),
+        "target_speed_mps":    float(args.target_speed_mps),
+        "ownship_speed_mps":   float(args.ownship_speed_mps) if args.ownship_speed_mps is not None else None,
+        "llm":                 bool(getattr(args, "llm", False)),
+        "llm_rule_only":       bool(getattr(args, "llm_rule_only", False)),
+        "llm_provider":        getattr(args, "llm_provider", None),
+        "llm_interval":        float(getattr(args, "llm_interval", 30.0)),
+        "llm_env_file":        getattr(args, "llm_env_file", None),
+    }
+
     # Save summary
     summary_path = seed_dir / "policy_eval_summary.json"
     with open(summary_path, 'w') as f:
@@ -389,6 +504,8 @@ def evaluate_policy(args):
     print("AGGREGATE METRICS")
     print(f"{'='*70}")
     for key, val in sorted(agg_results.items()):
+        if isinstance(val, dict):
+            continue  # skip nested eval_config dict in console output
         print(f"{key:40s}: {val:10.3f}")
     print(f"{'='*70}\n")
     

@@ -205,11 +205,12 @@ def animate_single_episode(
             X_all[-1, own_idx, 1] / NMI,
             s=70,
             marker="o",
-            color="#ff7f0e",
-            alpha=0.6,
+            color="darkgreen",
+            alpha=0.9,
             edgecolors="black",
             linewidth=1.0,
             zorder=5,
+            label="End",
         )
         artists.append(scatter2)
         

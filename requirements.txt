@@ -28,3 +28,11 @@ ray[rllib]
 # Logging / visualization
 # ===============================
 tensorboard
+
+# ===============================
+# LLM providers (CORALL intent layer)
+# ===============================
+langchain-openai   # ChatOpenAI used by CORALL's MultiLLMCOLREGSInterpreter
+langchain-core     # PromptTemplate dependency
+openai             # underlying OpenAI client (installed as langchain-openai dep)
+anthropic          # Claude via Anthropic API (optional, only if LLM_PROVIDER=claude)

@@ -11,19 +11,28 @@ Generated charts:
 7. Summary: Success/Collision rates aggregated by complexity level (2/3/4-ship)
 8. Separation Distance Scaling: impact of total ship count
 9. Scaling Analysis: 2x2 grid (path length, time, separation distance, risk) across ship counts
+10. Per-case time-series: DCPA / R / TCPA / Risk over time (Baseline solid, RL dashed)
+    - one figure per case: 10_timeseries_case{N:02d}.png
+    - requires seed_0/episode_histories/*.npz in each eval dir
+11. All-cases grid overview: 4 cases per row, nested 2x2 sub-panels (11_timeseries_grid_all_cases.png)
 """
 
 import argparse
 import json
+import math
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 NMI = 1852.0
+
+# Colour palette for target ships TS1–TS4 (same colour per TS across Baseline and RL;
+# linestyle '-' = Baseline, '--' = RL distinguishes the two systems).
+_TS_PALETTE = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd']
 
 
 def load_episode_histories(eval_dir: Path) -> List[Dict]:
@@ -75,6 +84,30 @@ def load_episode_histories(eval_dir: Path) -> List[Dict]:
             print(f"  Warning: Failed to load {npz_file.name}: {e}")
     
     return histories
+
+
+def load_one_episode_history(eval_dir: Path) -> Optional[Dict]:
+    """Load the first NPZ from seed_0/episode_histories/. Returns None if unavailable."""
+    ep_dir = eval_dir / "seed_0" / "episode_histories"
+    if not ep_dir.exists():
+        return None
+    npz_files = sorted(ep_dir.glob("*.npz"))
+    if not npz_files:
+        return None
+    try:
+        data = np.load(npz_files[0], allow_pickle=True)
+        X_all = np.asarray(data['X_all'], dtype=float)
+        return {
+            't':         np.asarray(data['t'],         dtype=float),
+            'pair_dcpa': np.asarray(data['pair_dcpa'], dtype=float),
+            'pair_dist': np.asarray(data['pair_dist'], dtype=float),
+            'pair_tcpa': np.asarray(data['pair_tcpa'], dtype=float),
+            'pair_risk': np.asarray(data['pair_risk'], dtype=float),
+            'n_agents':  X_all.shape[1],
+        }
+    except Exception as e:
+        print(f"  Warning: could not load history from {ep_dir}: {e}")
+        return None
 
 
 def summarize_csv(eval_dir: Path) -> dict:
@@ -209,9 +242,10 @@ def aggregate_case_metrics(
     Aggregate metrics for a single case across all episodes.
     
     Returns dict with keys: case, n_agents, n_additional_agents,
-                            baseline_min_dcpa, rl_min_dcpa,
+                            baseline_min_sep_nmi, rl_min_sep_nmi,
                             baseline_dist_m, rl_dist_m,
                             baseline_time_s, rl_time_s,
+                            baseline_near_miss_rate, rl_near_miss_rate,
                             n_episodes_baseline, n_episodes_rl
     """
     # Find directories for this case (use regex to match exact case number)
@@ -318,58 +352,49 @@ def aggregate_case_metrics(
     baseline_time_std = np.std(baseline_times, ddof=1) if len(baseline_times) > 1 else np.nan
     rl_time_std = np.std(rl_times, ddof=1) if len(rl_times) > 1 else np.nan
 
-    # ===== COLLISION/SUCCESS RATES FROM CSV (AUTHORITATIVE PER-EPISODE DATA) =====
-    # Read from policy_eval_per_episode.csv with correct column names: collision_any, success_ownship
+    # ===== CSV SUMMARIES ARE AUTHORITATIVE — ALWAYS PREFER OVER NPZ-COMPUTED VALUES =====
+    # policy_eval_per_episode.csv covers all 100 episodes; NPZ histories may be a single saved
+    # episode (n_episodes_baseline=1), so scalar metrics must come from the CSV.
+    baseline_csv_summary = summarize_csv(baseline_dir)
+    rl_csv_summary = summarize_csv(rl_dir)
+
+    baseline_n_episodes_csv = 0
     baseline_collision_rate = np.nan
     baseline_success_rate = np.nan
+    baseline_near_miss_rate = np.nan
+
+    if baseline_csv_summary:
+        baseline_n_episodes_csv = int(baseline_csv_summary.get("n_episodes", 0))
+        baseline_min_sep_avg   = baseline_csv_summary.get("min_sep_m", np.nan) / NMI
+        baseline_min_sep_std   = baseline_csv_summary.get("min_sep_m_std", np.nan) / NMI
+        baseline_risk_avg      = baseline_csv_summary.get("risk_exposure", np.nan)
+        baseline_risk_std      = baseline_csv_summary.get("risk_exposure_std", np.nan)
+        baseline_dist_avg      = baseline_csv_summary.get("path_length_m", np.nan)
+        baseline_dist_std      = baseline_csv_summary.get("path_length_m_std", np.nan)
+        baseline_time_avg      = baseline_csv_summary.get("time_s", np.nan)
+        baseline_time_std      = baseline_csv_summary.get("time_s_std", np.nan)
+        baseline_collision_rate = baseline_csv_summary.get("collision_rate", np.nan)
+        baseline_success_rate  = baseline_csv_summary.get("success_rate", np.nan)
+        baseline_near_miss_rate = baseline_csv_summary.get("near_miss_rate", np.nan)
+
+    rl_n_episodes_csv = 0
     rl_collision_rate = np.nan
     rl_success_rate = np.nan
-    
-    baseline_csv = baseline_dir / 'seed_0' / 'policy_eval_per_episode.csv'
-    rl_csv = rl_dir / 'seed_0' / 'policy_eval_per_episode.csv'
-    
-    if baseline_csv.exists():
-        try:
-            baseline_df = pd.read_csv(baseline_csv)
-            if 'collision_any' in baseline_df.columns:
-                baseline_collision_rate = baseline_df['collision_any'].mean()
-            if 'success_ownship' in baseline_df.columns:
-                baseline_success_rate = baseline_df['success_ownship'].mean()
-        except Exception as e:
-            print(f"    Warning: Could not load baseline CSV: {e}")
-    
-    if rl_csv.exists():
-        try:
-            rl_df = pd.read_csv(rl_csv)
-            if 'collision_any' in rl_df.columns:
-                rl_collision_rate = rl_df['collision_any'].mean()
-            if 'success_ownship' in rl_df.columns:
-                rl_success_rate = rl_df['success_ownship'].mean()
-        except Exception as e:
-            print(f"    Warning: Could not load RL CSV: {e}")
+    rl_near_miss_rate = np.nan
 
-    # === Fallback: populate RL scalar metrics from CSV when no NPZ episode histories ===
-    rl_n_episodes_csv = 0
-    if not rl_hists:
-        _csv = summarize_csv(rl_dir)
-        if _csv:
-            rl_n_episodes_csv = int(_csv.get("n_episodes", 0))
-            if np.isnan(rl_min_sep_avg):
-                rl_min_sep_avg = _csv.get("min_sep_m", np.nan) / NMI
-                rl_min_sep_std = _csv.get("min_sep_m_std", np.nan) / NMI
-            if np.isnan(rl_risk_avg):
-                rl_risk_avg = _csv.get("risk_exposure", np.nan)
-                rl_risk_std = _csv.get("risk_exposure_std", np.nan)
-            if np.isnan(rl_dist_avg):
-                rl_dist_avg = _csv.get("path_length_m", np.nan)
-                rl_dist_std = _csv.get("path_length_m_std", np.nan)
-            if np.isnan(rl_time_avg):
-                rl_time_avg = _csv.get("time_s", np.nan)
-                rl_time_std = _csv.get("time_s_std", np.nan)
-            if np.isnan(rl_collision_rate):
-                rl_collision_rate = _csv.get("collision_rate", np.nan)
-            if np.isnan(rl_success_rate):
-                rl_success_rate = _csv.get("success_rate", np.nan)
+    if rl_csv_summary:
+        rl_n_episodes_csv = int(rl_csv_summary.get("n_episodes", 0))
+        rl_min_sep_avg   = rl_csv_summary.get("min_sep_m", np.nan) / NMI
+        rl_min_sep_std   = rl_csv_summary.get("min_sep_m_std", np.nan) / NMI
+        rl_risk_avg      = rl_csv_summary.get("risk_exposure", np.nan)
+        rl_risk_std      = rl_csv_summary.get("risk_exposure_std", np.nan)
+        rl_dist_avg      = rl_csv_summary.get("path_length_m", np.nan)
+        rl_dist_std      = rl_csv_summary.get("path_length_m_std", np.nan)
+        rl_time_avg      = rl_csv_summary.get("time_s", np.nan)
+        rl_time_std      = rl_csv_summary.get("time_s_std", np.nan)
+        rl_collision_rate = rl_csv_summary.get("collision_rate", np.nan)
+        rl_success_rate  = rl_csv_summary.get("success_rate", np.nan)
+        rl_near_miss_rate = rl_csv_summary.get("near_miss_rate", np.nan)
 
     return {
         'case': case_num,
@@ -395,7 +420,9 @@ def aggregate_case_metrics(
         'rl_collision_rate': rl_collision_rate,
         'baseline_success_rate': baseline_success_rate,
         'rl_success_rate': rl_success_rate,
-        'n_episodes_baseline': len(baseline_distances),
+        'baseline_near_miss_rate': baseline_near_miss_rate,
+        'rl_near_miss_rate': rl_near_miss_rate,
+        'n_episodes_baseline': baseline_n_episodes_csv if baseline_n_episodes_csv > 0 else len(baseline_distances),
         'n_episodes_rl': rl_n_episodes_csv if rl_n_episodes_csv > 0 else len(rl_distances),
     }
 
@@ -682,9 +709,13 @@ def create_bar_chart_success_rate(metrics_df: pd.DataFrame, output_path: Path):
     case_labels = [f"C{int(c)}\n({int(n)}s)" 
                    for c, n in zip(metrics_df['case'], metrics_df['n_agents'])]
     
-    # Success rate = 1 - collision_rate
-    baseline_success_pct = (1 - metrics_df['baseline_collision_rate']) * 100
-    rl_success_pct = (1 - metrics_df['rl_collision_rate']) * 100
+    # Use actual success_rate from CSV if available; fall back to 1 - collision_rate
+    baseline_success_pct = metrics_df['baseline_success_rate'].fillna(
+        1 - metrics_df['baseline_collision_rate']
+    ) * 100
+    rl_success_pct = metrics_df['rl_success_rate'].fillna(
+        1 - metrics_df['rl_collision_rate']
+    ) * 100
     
     bars1 = ax.bar(x - width/2, baseline_success_pct, width, label='Baseline', color='#2ca02c')
     bars2 = ax.bar(x + width/2, rl_success_pct, width, label='RL Policy', color='#1f77b4')
@@ -732,31 +763,31 @@ def create_summary_guaranteed_success(metrics_df: pd.DataFrame, output_path: Pat
     # 2-ship scenarios
     if len(cat_2ship) > 0:
         categories.append("2-Ship\n(Simple)")
-        baseline_success.append((1 - cat_2ship['baseline_collision_rate'].mean()) * 100)
-        rl_success.append((1 - cat_2ship['rl_collision_rate'].mean()) * 100)
+        baseline_success.append(cat_2ship['baseline_success_rate'].fillna(1 - cat_2ship['baseline_collision_rate']).mean() * 100)
+        rl_success.append(cat_2ship['rl_success_rate'].fillna(1 - cat_2ship['rl_collision_rate']).mean() * 100)
         baseline_collision.append(cat_2ship['baseline_collision_rate'].mean() * 100)
         rl_collision.append(cat_2ship['rl_collision_rate'].mean() * 100)
     
     # 3-ship scenarios
     if len(cat_3ship) > 0:
         categories.append("3-Ship\n(Moderate)")
-        baseline_success.append((1 - cat_3ship['baseline_collision_rate'].mean()) * 100)
-        rl_success.append((1 - cat_3ship['rl_collision_rate'].mean()) * 100)
+        baseline_success.append(cat_3ship['baseline_success_rate'].fillna(1 - cat_3ship['baseline_collision_rate']).mean() * 100)
+        rl_success.append(cat_3ship['rl_success_rate'].fillna(1 - cat_3ship['rl_collision_rate']).mean() * 100)
         baseline_collision.append(cat_3ship['baseline_collision_rate'].mean() * 100)
         rl_collision.append(cat_3ship['rl_collision_rate'].mean() * 100)
     
     # 4-ship scenarios
     if len(cat_4ship) > 0:
         categories.append("4-Ship\n(Complex)")
-        baseline_success.append((1 - cat_4ship['baseline_collision_rate'].mean()) * 100)
-        rl_success.append((1 - cat_4ship['rl_collision_rate'].mean()) * 100)
+        baseline_success.append(cat_4ship['baseline_success_rate'].fillna(1 - cat_4ship['baseline_collision_rate']).mean() * 100)
+        rl_success.append(cat_4ship['rl_success_rate'].fillna(1 - cat_4ship['rl_collision_rate']).mean() * 100)
         baseline_collision.append(cat_4ship['baseline_collision_rate'].mean() * 100)
         rl_collision.append(cat_4ship['rl_collision_rate'].mean() * 100)
     
     # Overall average
     categories.append("Overall\nAverage")
-    baseline_success.append((1 - metrics_df['baseline_collision_rate'].mean()) * 100)
-    rl_success.append((1 - metrics_df['rl_collision_rate'].mean()) * 100)
+    baseline_success.append(metrics_df['baseline_success_rate'].fillna(1 - metrics_df['baseline_collision_rate']).mean() * 100)
+    rl_success.append(metrics_df['rl_success_rate'].fillna(1 - metrics_df['rl_collision_rate']).mean() * 100)
     baseline_collision.append(metrics_df['baseline_collision_rate'].mean() * 100)
     rl_collision.append(metrics_df['rl_collision_rate'].mean() * 100)
     
@@ -884,7 +915,8 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
         rl_collision = group['rl_collision_rate'].mean()
         # Efficiencies
         sep_efficiency = ((rl_sep - baseline_sep) / baseline_sep * 100) if baseline_sep > 0 else 0
-        risk_efficiency = ((baseline_risk - rl_risk) / baseline_risk * 100) if baseline_risk > 0 else 0
+        # Suppress risk % when baseline is near zero (avoids absurd values like -27000%)
+        risk_efficiency = ((baseline_risk - rl_risk) / baseline_risk * 100) if baseline_risk > 0.1 else np.nan
         dist_efficiency = ((baseline_dist - rl_dist) / baseline_dist * 100) if baseline_dist > 0 else 0
         time_efficiency = ((baseline_time - rl_time) / baseline_time * 100) if baseline_time > 0 else 0
         collision_efficiency = ((baseline_collision - rl_collision) / max(baseline_collision, 0.001) * 100)
@@ -1032,6 +1064,8 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     if np.isfinite(rl_risk_std_arr).any():
         ax.fill_between(x, rl_risk_arr - rl_risk_std_arr, rl_risk_arr + rl_risk_std_arr, color='#ff7f0e', alpha=0.18)
     for i, (xi, eff) in enumerate(zip(x, grouped_df['risk_efficiency'])):
+        if np.isnan(eff):
+            continue
         color = 'green' if eff > 0 else 'red'
         symbol = '+' if eff > 0 else ''
         ax.annotate(f'{symbol}{eff:.1f}%', xy=(xi, rl_risk_arr[i]), xytext=(0, 8), textcoords='offset points', ha='center', fontsize=11, fontweight='bold', color=color, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
@@ -1062,6 +1096,278 @@ def create_scaling_line_charts(metrics_df: pd.DataFrame, output_path: Path):
     fig.savefig(output_path, dpi=300, format='png')
     plt.close(fig)
     print(f"  Saved: {output_path.name}")
+
+
+_ENCOUNTER_DIST_NMI = 3.0  # same threshold used in env_multi_agent_ppo.py DCPA tracking
+
+
+def _fill_encounter_axes(
+    ax_dcpa, ax_r, ax_tcpa, ax_risk,
+    hist: Dict, n_ts: int,
+    system_label: str, lw: float, ls: str,
+    tcpa_clip: float = 1500.0,
+):
+    """
+    Plot DCPA / Range / TCPA / Risk from ownship (index 0) vs each target ship
+    into four axes.  Colour distinguishes TS; linestyle distinguishes the system.
+
+    DCPA and TCPA are masked to NaN outside the 3 nmi encounter zone (same
+    threshold as env_multi_agent_ppo.py) so ill-defined CPA geometry when
+    ships are far apart does not produce spikes.  Range (R) and Risk are
+    shown for the full episode.
+
+    Units:
+    - DCPA in meters
+    - Range in meters
+    - TCPA in seconds
+    - Risk in [0, 1]
+    """
+    t = hist['t']
+    own = 0
+    for i in range(n_ts):
+        k = i + 1
+        color = _TS_PALETTE[i % len(_TS_PALETTE)]
+        ts_tag = f" TS{i+1}" if n_ts > 1 else ""
+        lbl = f"{system_label}{ts_tag}"
+
+        dist_m    = hist['pair_dist'][:, own, k]
+        r_m       = dist_m
+        risk_k    = hist['pair_risk'][:, own, k]
+
+        # Mask DCPA and TCPA outside the encounter zone (dist > 3 nmi)
+        in_encounter = dist_m <= (_ENCOUNTER_DIST_NMI * NMI)
+        dcpa_raw  = hist['pair_dcpa'][:, own, k]
+        tcpa_raw  = np.clip(hist['pair_tcpa'][:, own, k], -tcpa_clip, tcpa_clip)
+        dcpa_m    = np.where(in_encounter, dcpa_raw,  np.nan)
+        tcpa_s    = np.where(in_encounter, tcpa_raw,  np.nan)
+
+        ax_dcpa.plot(t, dcpa_m, color=color, lw=lw, ls=ls, label=lbl)
+        ax_r.plot(   t, r_m,    color=color, lw=lw, ls=ls, label=lbl)
+        ax_tcpa.plot(t, tcpa_s,  color=color, lw=lw, ls=ls, label=lbl)
+        ax_risk.plot(t, risk_k,  color=color, lw=lw, ls=ls, label=lbl)
+
+
+def plot_timeseries_per_case(
+    baseline_dirs: List[Path],
+    rl_dirs: List[Path],
+    case_numbers: List[int],
+    output_dir: Path,
+) -> int:
+    """
+    Per-case 2x2 time-series comparison: DCPA (m), Range (m), TCPA (s), Risk.
+    Baseline = solid lines, RL = dashed lines.  Colours distinguish target ships.
+    Saves 10_timeseries_case{N:02d}.png for each case with at least one NPZ.
+    Returns number of figures saved.
+    """
+    from matplotlib.lines import Line2D
+
+    n_saved = 0
+    for case_num in sorted(case_numbers):
+        pat = re.compile(rf"case{case_num}(?:\D|$)")
+        bl_match = [d for d in baseline_dirs if pat.search(d.name)]
+        rl_match = [d for d in rl_dirs       if pat.search(d.name)]
+
+        bl_hist = load_one_episode_history(bl_match[0]) if bl_match else None
+        rl_hist = load_one_episode_history(rl_match[0]) if rl_match else None
+
+        if bl_hist is None and rl_hist is None:
+            continue
+
+        n_agents = (bl_hist or rl_hist)['n_agents']
+        n_ts     = n_agents - 1
+
+        fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+        ax_dcpa, ax_r    = axes[0]
+        ax_tcpa, ax_risk = axes[1]
+
+        if bl_hist is not None:
+            _fill_encounter_axes(ax_dcpa, ax_r, ax_tcpa, ax_risk,
+                                  bl_hist, n_ts, 'Baseline', lw=1.5, ls='-')
+        if rl_hist is not None:
+            _fill_encounter_axes(ax_dcpa, ax_r, ax_tcpa, ax_risk,
+                                  rl_hist, n_ts, 'RL', lw=1.5, ls='--')
+
+        ax_dcpa.set(ylabel='DCPA (m)', xlabel='Time (s)')
+        ax_dcpa.set_ylim(bottom=0)
+        ax_r.set(ylabel='Range (m)', xlabel='Time (s)')
+        ax_r.set_ylim(bottom=0)
+        ax_tcpa.set(ylabel='TCPA (s)', xlabel='Time (s)')
+        ax_tcpa.axhline(0, color='k', lw=0.6, ls=':')
+        ax_risk.set(ylabel='Risk', xlabel='Time (s)', ylim=(0, 1.05))
+
+        # Increase axis label readability (+2 sizing request).
+        ax_dcpa.xaxis.label.set_size(12)
+        ax_dcpa.yaxis.label.set_size(12)
+        ax_r.xaxis.label.set_size(12)
+        ax_r.yaxis.label.set_size(12)
+        ax_tcpa.xaxis.label.set_size(12)
+        ax_tcpa.yaxis.label.set_size(12)
+        ax_risk.xaxis.label.set_size(12)
+        ax_risk.yaxis.label.set_size(12)
+
+        for ax in axes.flat:
+            ax.grid(alpha=0.3)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=7, loc='best')
+
+        # System + TS colour legend
+        legend_handles = [
+            Line2D([0], [0], color='k', ls='-',  lw=1.5, label='Baseline'),
+            Line2D([0], [0], color='k', ls='--', lw=1.5, label='RL Policy'),
+        ]
+        if n_ts > 1:
+            for i in range(n_ts):
+                legend_handles.append(
+                    Line2D([0], [0], color=_TS_PALETTE[i], lw=1.5, label=f'TS{i+1}')
+                )
+        fig.legend(handles=legend_handles, loc='upper center',
+                   ncol=min(6, 2 + n_ts), bbox_to_anchor=(0.5, 1.01), fontsize=9)
+
+        fig.suptitle(
+            f"Case {case_num} — Encounter Metrics: Baseline vs RL (Ownship Perspective)",
+            y=1.06, fontsize=12, fontweight='bold'
+        )
+        fig.tight_layout()
+
+        out_path = output_dir / f"10_timeseries_case{case_num:02d}.png"
+        fig.savefig(out_path, dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        n_saved += 1
+        print(f"  Saved: {out_path.name}")
+
+    return n_saved
+
+
+def plot_timeseries_grid_all(
+    baseline_dirs: List[Path],
+    rl_dirs: List[Path],
+    case_numbers: List[int],
+    output_path: Path,
+):
+    """
+    All-cases overview: 4 cases per row, nested 2x2 sub-panels
+    (DCPA/Range/TCPA/Risk).
+    Saves 11_timeseries_grid_all_cases.png.
+    """
+    import matplotlib.gridspec as gridspec
+    from matplotlib.lines import Line2D
+
+    sorted_cases = sorted(case_numbers)
+    n_cases = len(sorted_cases)
+    n_cols  = 4
+    n_rows  = math.ceil(n_cases / n_cols)
+
+    fig = plt.figure(figsize=(n_cols * 5.8, n_rows * 5.8))
+    # Keep title/legend inside figure bounds and reserve explicit top margin,
+    # avoiding large blank area when saving with bbox_inches='tight'.
+    outer_gs = gridspec.GridSpec(
+        n_rows, n_cols,
+        left=0.035, right=0.995, top=0.88, bottom=0.055,
+        hspace=0.64, wspace=0.35,
+        figure=fig,
+    )
+
+    any_data = False
+    for idx, case_num in enumerate(sorted_cases):
+        r = idx // n_cols
+        c = idx % n_cols
+        inner = gridspec.GridSpecFromSubplotSpec(
+            2, 2, subplot_spec=outer_gs[r, c], hspace=0.82, wspace=0.32
+        )
+        ax_dcpa = fig.add_subplot(inner[0, 0])
+        ax_r    = fig.add_subplot(inner[0, 1])
+        ax_tcpa = fig.add_subplot(inner[1, 0])
+        ax_risk = fig.add_subplot(inner[1, 1])
+
+        pat = re.compile(rf"case{case_num}(?:\D|$)")
+        bl_match = [d for d in baseline_dirs if pat.search(d.name)]
+        rl_match = [d for d in rl_dirs       if pat.search(d.name)]
+
+        bl_hist = load_one_episode_history(bl_match[0]) if bl_match else None
+        rl_hist = load_one_episode_history(rl_match[0]) if rl_match else None
+
+        n_agents = get_n_agents_from_case(case_num)
+        if bl_hist:  n_agents = bl_hist['n_agents']
+        elif rl_hist: n_agents = rl_hist['n_agents']
+        n_ts = n_agents - 1
+
+        if bl_hist is not None:
+            _fill_encounter_axes(ax_dcpa, ax_r, ax_tcpa, ax_risk,
+                                  bl_hist, n_ts, 'BL', lw=1.0, ls='-')
+            any_data = True
+        if rl_hist is not None:
+            _fill_encounter_axes(ax_dcpa, ax_r, ax_tcpa, ax_risk,
+                                  rl_hist, n_ts, 'RL', lw=1.0, ls='--')
+            any_data = True
+
+        # Center case label over the entire 2x2 quad (instead of only over DCPA axis).
+        quad_bbox = outer_gs[r, c].get_position(fig)
+        case_x = (quad_bbox.x0 + quad_bbox.x1) * 0.5
+        case_y = quad_bbox.y1 + 0.014
+        fig.text(
+            case_x,
+            case_y,
+            f"Case {case_num}",
+            ha='center', va='bottom', fontsize=21, fontweight='bold'
+        )
+        fig.text(
+            case_x,
+            case_y - 0.013,
+            f"({n_agents} ships)",
+            ha='center', va='bottom', fontsize=13, fontweight='normal'
+        )
+
+        # Bold all subplot metric titles for consistency.
+        # Double metric-title sizes for DCPA/Range/TCPA/Risk.
+        ax_dcpa.set_title('DCPA (m)', fontsize=17, fontweight='bold', pad=2)
+        ax_r.set_title('Range (m)', fontsize=17, fontweight='bold', pad=2)
+        ax_tcpa.set_title('TCPA (s)', fontsize=17, fontweight='bold', pad=2)
+        ax_risk.set_title('Risk', fontsize=17, fontweight='bold', pad=2)
+
+        # Restore readable axis labels.
+        # Increase x/y label font sizes by +2.
+        ax_dcpa.set_ylabel('DCPA (m)', fontsize=9.5)
+        ax_r.set_ylabel('Range (m)', fontsize=9.5)
+        ax_tcpa.set_ylabel('TCPA (s)', fontsize=9.5)
+        ax_risk.set_ylabel('Risk', fontsize=9.5)
+
+        for ax in [ax_dcpa, ax_r, ax_tcpa, ax_risk]:
+            ax.tick_params(labelsize=6.5)
+            ax.grid(alpha=0.2)
+
+        # Show x-axis labels on BOTH rows (requested), while larger hspace above
+        # prevents overlap with second-row titles.
+        ax_dcpa.set_xlabel('Time (s)', fontsize=9.5, labelpad=1)
+        ax_r.set_xlabel('Time (s)', fontsize=9.5, labelpad=1)
+        ax_tcpa.set_xlabel('Time (s)', fontsize=9.5, labelpad=1)
+        ax_risk.set_xlabel('Time (s)', fontsize=9.5, labelpad=1)
+        ax_dcpa.set_ylim(bottom=0)
+        ax_r.set_ylim(bottom=0)
+        ax_tcpa.axhline(0, color='k', lw=0.5, ls=':')
+        ax_risk.set_ylim(0, 1.05)
+
+    # Global legend
+    legend_handles = [
+        Line2D([0], [0], color='k', ls='-',  lw=1.5, label='Baseline'),
+        Line2D([0], [0], color='k', ls='--', lw=1.5, label='RL Policy'),
+    ]
+    for i in range(3):
+        legend_handles.append(
+            Line2D([0], [0], color=_TS_PALETTE[i], lw=1.5, label=f'TS{i+1}')
+        )
+    fig.legend(handles=legend_handles, loc='upper center', ncol=5,
+               bbox_to_anchor=(0.5, 0.945), fontsize=29)
+    fig.suptitle(
+        "Plot of parameter evolution in all 22 Imazu Test Cases",
+        y=0.992, fontsize=53, fontweight='bold'
+    )
+
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    if any_data:
+        print(f"  Saved: {output_path.name}")
+    else:
+        print(f"  No NPZ history data found — {output_path.name} skipped")
 
 
 def main():
@@ -1133,7 +1439,20 @@ def main():
     
     print("\nGenerating scaling line charts...")
     create_scaling_line_charts(df, args.output_dir / '09_scaling_analysis_lines.png')
-    
+
+    print("\nGenerating time-series encounter plots...")
+    n_ts_plots = plot_timeseries_per_case(
+        baseline_dirs, rl_dirs, args.case_numbers, args.output_dir
+    )
+    if n_ts_plots > 0:
+        plot_timeseries_grid_all(
+            baseline_dirs, rl_dirs, args.case_numbers,
+            args.output_dir / '11_timeseries_grid_all_cases.png'
+        )
+    else:
+        print("  No episode histories found — run RL eval with --save_first_history")
+        print("  and ensure baseline episode_histories/ dirs exist.")
+
     # Print summary
     print("\n" + "="*70)
     print("COMPARISON SUMMARY")
