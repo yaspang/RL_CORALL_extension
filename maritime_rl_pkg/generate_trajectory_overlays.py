@@ -281,7 +281,7 @@ def plot_stacked_rl_only_trajectory_overlay(
     n_cases = len(case_data)
     n_cols = 4
     n_rows = int(np.ceil(n_cases / n_cols))
-    fig = plt.figure(figsize=(n_cols * 5.0, n_rows * 4.35))
+    fig = plt.figure(figsize=(n_cols * 5.25, n_rows * 4.57))
     outer_gs = gridspec.GridSpec(
         n_rows, n_cols,
         left=0.03, right=0.995, top=0.84, bottom=0.055,
@@ -421,12 +421,12 @@ def plot_stacked_rl_only_trajectory_overlay(
                markeredgecolor=goal_color, markersize=7, label="Goal"),
     ]
     fig.legend(handles=handles, loc="upper center", ncol=4,
-               fontsize=13, framealpha=0.95, bbox_to_anchor=(0.5, 0.965),
+               fontsize=160, framealpha=0.95, bbox_to_anchor=(0.5, 0.965),
                prop={'weight': 'bold'}, edgecolor='black', fancybox=True)
 
     fig.suptitle(
         "RL Ownship Trajectories with Target Ships Across All 22 Imazu Cases",
-        y=0.995, fontsize=44, fontweight="bold"
+        y=0.995, fontsize=33, fontweight="bold"
     )
 
     fig.tight_layout(rect=(0, 0, 1, 0.88))
