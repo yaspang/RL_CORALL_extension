@@ -3,7 +3,7 @@ import numpy as np
 
 def decision_making(x, y, psi, x_ob, y_ob, psi_ob, v_rel, u, risk):
     """
-    Make collision avoidance decisions based on COLREG rules.
+    Make collision avoidance decisions based on COLREG rules. Rule classifier helper.
 
     Parameters:
     x, y (float): Position of the vessel

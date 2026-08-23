@@ -1,19 +1,69 @@
 # RL_CORALL_extension
 
-Deep Reinforcement Learning for Maritime Collision Avoidance using CORALL Simulator
+LLM-Guided Reinforcement Learning for Maritime Collision Avoidance
+
+*Extension of the CORALL maritime collision-avoidance framework*
 
 ## Overview
 
-This project extends the CORALL maritime collision avoidance simulator with Reinforcement Learning (RL) training and evaluation capabilities. A single generalized PPO policy is trained using curriculum learning to handle collision avoidance across a range of multi-ship encounter scenarios. The project supports two training modes: a **case-based mode** using the 22 fixed Imazu encounter geometries, and a **procedural encounter mode** that generates fully randomized encounters at runtime with no fixed geometry.
+This project extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework with reinforcement learning (RL) training, evaluation, and LLM-guided supervisory control. A generalized Proximal Policy Optimization (PPO) policy is trained for multi-ship collision avoidance and path following, while an LLM-based decision module can provide high-level COLREGs maneuver intent during evaluation.
 
-**Key Features:**
-- **Two Training Modes**: Fixed Imazu case rotation (`RandomCaseEnv`) or fully procedural randomized encounters (`RandomEncounterEnv`)
-- **Curriculum Learning**: Policy trained progressively — 1 target → 1–2 targets → 1–3 targets
-- **Generalized Policy**: Single checkpoint evaluated across all 22 CORALL cases
-- **Backwards-from-Crossing Geometry**: Procedural mode places targets by sampling speed and angle independently, then computing start positions so all ships arrive at the crossing point simultaneously
-- **Constraint-Based Checkpoint Selection**: Checkpoints ranked by safety constraints (collision-free + full success required) before secondary metrics
-- **Normalized Observations**: 29-dimensional state space with stable normalization
-- **Comprehensive Metrics**: Collision rate, success rate, risk exposure, minimum separation, completion time
+The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K&#8336;&#7433;&#7523; ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
+
+The project supports both fixed Imazu encounter geometries and procedurally generated multi-ship encounters.
+
+### Key Features
+
+- **Generalized PPO Policy:** Single policy trained across multi-ship collision-avoidance encounters
+- **Two Training Modes:** Fixed Imazu case rotation (`RandomCaseEnv`) or procedurally randomized encounters (`RandomEncounterEnv`)
+- **Curriculum Learning:** Encounter complexity progresses from one target to as many as three targets
+- **29-Dimensional Observation Space:** Ownship, goal, and relative target-ship features
+- **Discrete Heading and Speed Control:** `MultiDiscrete([7, 5])` action space
+- **LLM-Guided Maneuver Intent:** COLREGs reasoning based on range, DCPA, TCPA, relative bearing, and collision risk
+- **Intent-Action Arbitration:** Valid LLM intent constrains the PPO-proposed heading direction without directly modifying the PPO network input
+- **LLM Reliability Evaluation:** Measures Valid Intent Rate and Strict Action Accuracy against a deterministic geometry/COLREGs reference
+- **Safety-Oriented Evaluation:** Collision rate, success rate, risk exposure, minimum separation, and completion time
+- **Constraint-Based Checkpoint Selection:** Collision-free and fully successful checkpoints prioritized before secondary metrics
+
+## LLM-Guided Control Architecture
+
+The LLM is used as a supervisory intent source rather than as the primary low-level controller.
+
+```
+                     Encounter State
+                     /             \
+                    /               \
+                   v                 v
+             PPO Policy       LLM Decision Module
+                   |                 |
+          Proposed action       Parsed intent
+         [heading, speed]          K_dir
+                   \                 /
+                    \               /
+                     v             v
+                   Intent-Action Arbiter
+                          |
+                    Final action
+                          |
+                       Ownship
+```
+
+The PPO policy receives only the environment observation and is not conditioned directly on K&#8336;&#7433;&#7523;. During evaluation, the LLM is queried periodically and produces a high-level maneuver recommendation. When a valid intent is available, the arbiter constrains the heading component of the PPO proposal to remain consistent with the prescribed maneuver direction. If the PPO heading is already compatible with the intent, the proposal is retained. If the LLM output is unavailable or invalid, control falls back to the PPO proposal; deterministic emergency safety logic retains higher authority.
+
+### LLM Inputs
+For target ships within the local encounter region (≤ 3 nmi), the LLM receives:
+- Range, DCPA, TCPA
+- Relative bearing
+- Collision-risk value
+- Encounter phase
+- Deterministic COLREGs rule hint (from CORALL `decision_making()`)
+
+The LLM response contains a proposed maneuver, the applicable COLREGs rule, and supporting rationale. The maneuver is parsed to:
+```
+K_dir = -1  -> port
+K_dir =  0  -> stand on / maintain
+K_dir = +1  -> starboard
+```
 
 ---
 
@@ -27,8 +77,10 @@ This project extends the CORALL maritime collision avoidance simulator with Rein
 │                                                                 │
 │  Agent 0 (Ownship) - RL Controlled                             │
 │  └─ PPO Policy from Stable-Baselines3                          │
-│     Action: Heading command (7 discrete bins)                  │
-│     Observation: 29-dim state vector                           │
+│     Action: MultiDiscrete([7, 5])                              │
+│       └─ Heading: 7 discrete bins                              │
+│       └─ Speed:   5 discrete bins                              │
+│     Observation: 29-dim normalized state vector                │
 │     Reward: 5-component shaping function                       │
 │                                                                 │
 └──────────────────────┬──────────────────────────────────────────┘
@@ -105,6 +157,22 @@ This project extends the CORALL maritime collision avoidance simulator with Rein
 - Obstacles follow fixed CORALL-scripted trajectories
 - Used for fair side-by-side comparison with RL policy
 
+## PPO Network Architecture
+
+The PPO policy is implemented using Stable-Baselines3 `MlpPolicy`. The actor and critic use separate feed-forward hidden branches, each with two fully connected layers of 256 neurons and Tanh activation.
+
+```
+PPO Policy from Stable-Baselines3
+├─ Observation: 29-D normalized state
+├─ Action: MultiDiscrete([7,5])
+│  ├─ Heading: 7 discrete bins
+│  └─ Speed:   5 discrete bins
+├─ Actor:  [256, 256], Tanh
+└─ Critic: [256, 256], Tanh
+```
+
+The actor produces categorical heading and speed decisions, while the critic estimates the scalar state value V(s).
+
 ---
 
 ## Training Pipeline
@@ -133,7 +201,7 @@ This project extends the CORALL maritime collision avoidance simulator with Rein
 
 **Mode A — Case-Based Training** (Imazu cases):
 ```bash
-python -m maritime_rl_pkg.train_generalized_policy_sb3 \
+python -m src.train_generalized_policy_sb3 \
     --num_steps 3000000 \
     --train_batch 256 \
     --rollout_frag 256 \
@@ -147,7 +215,7 @@ python -m maritime_rl_pkg.train_generalized_policy_sb3 \
 
 **Mode B — Procedural Encounter Training** (recommended for generalization):
 ```bash
-python -m maritime_rl_pkg.train_generalized_policy_sb3 \
+python -m src.train_generalized_policy_sb3 \
     --num_steps 3000000 \
     --train_batch 256 \
     --rollout_frag 256 \
@@ -179,7 +247,7 @@ After training, all saved checkpoints are evaluated on a representative set of c
 This ensures safety constraints are hard requirements, not tradeoff weights.
 
 ```bash
-python -m maritime_rl_pkg.rank_checkpoints_weighted \
+python -m src.rank_checkpoints_weighted \
     --training_dir "GENERALIZED_SB3_YYYYMMDD-HHMMSS" \
     --quick_eval \
     --desired_cross_x_nmi 1.00 \
@@ -199,7 +267,7 @@ python -m maritime_rl_pkg.rank_checkpoints_weighted \
 Evaluates a single checkpoint on a specific Imazu case.
 
 ```bash
-python -m maritime_rl_pkg.eval_generalized_policy_sb3 \
+python -m src.eval_generalized_policy_sb3 \
     --checkpoint GENERALIZED_SB3_YYYYMMDD-HHMMSS/checkpoints/generalized_checkpoint_300000_steps.zip \
     --case 6 \
     --episodes 100 \
@@ -225,7 +293,7 @@ python -m maritime_rl_pkg.eval_generalized_policy_sb3 \
 Evaluates CORALL's rule-based guidance on a single case for comparison.
 
 ```bash
-python -m maritime_rl_pkg.eval_baseline_with_hist \
+python -m src.baseline_eval.eval_baseline_with_hist \
     --case 6 \
     --episodes 100 \
     --seed 0 \
@@ -243,7 +311,7 @@ python -m maritime_rl_pkg.eval_baseline_with_hist \
 Generates side-by-side comparison charts of CORALL baseline vs RL policy across all 22 cases.
 
 ```bash
-python -m maritime_rl_pkg.compare_case_metrics \
+python -m src.performance_eval.compare_case_metrics \
     --base_dir . \
     --case_numbers 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 \
     --output_dir comparison_results_fixed
@@ -268,12 +336,12 @@ python -m maritime_rl_pkg.compare_case_metrics \
 
 ```bash
 # Single episode
-python -m maritime_rl_pkg.generate_trajectory_overlays \
+python -m src.visualizations.generate_trajectory_overlays \
     policy_eval_generalized_sb3_case6_YYYYMMDD-HHMMSS/seed_0/episode_histories/case6_seed0_ep000.npz \
     --output_dir overlays/
 
 # All episodes from one evaluation run
-python -m maritime_rl_pkg.batch_animate_eval \
+python -m src.visualizations.batch_animate_eval \
     policy_eval_generalized_sb3_case6_YYYYMMDD-HHMMSS/
 ```
 
@@ -303,33 +371,73 @@ All observations are padded to a consistent 29-dim vector for policy compatibili
 ## Complete Workflow
 
 ```
-1. Train
-   python -m maritime_rl_pkg.train_generalized_policy_sb3
+1. Train PPO
+   python -m src.train_generalized_policy_sb3
        --use_procedural_encounters --num_steps 3000000 --sim_time 900.0 ...
          └─ GENERALIZED_SB3_YYYYMMDD-HHMMSS/checkpoints/
 
 2. Rank Checkpoints
-   python -m maritime_rl_pkg.rank_checkpoints_weighted
+   python -m src.rank_checkpoints_weighted
        --training_dir GENERALIZED_SB3_YYYYMMDD-HHMMSS --sim_time 900.0 ...
          └─ Select best checkpoint (collision=0, success=1.0)
 
-3. Evaluate RL Policy (all 22 cases)
-   python -m maritime_rl_pkg.eval_generalized_policy_sb3
+3. Evaluate PPO across encounter cases
+   python -m src.eval_generalized_policy_sb3
        --checkpoint <best>.zip --case N --episodes 100 --sim_time 900.0 ...
          └─ policy_eval_generalized_sb3_caseN_YYYYMMDD-HHMMSS/
 
-4. Evaluate Baseline (all 22 cases)
-   python -m maritime_rl_pkg.eval_baseline_with_hist
+4. Evaluate CORALL baseline
+   python -m src.baseline_eval.eval_baseline_with_hist
        --case N --episodes 100 ...
          └─ corall_baseline_caseN_YYYYMMDD-HHMMSS/
 
-5. Compare Results
-   python -m maritime_rl_pkg.compare_case_metrics
-       --base_dir . --output_dir comparison_results_fixed
+5. Compare RL and baseline performance
+   python -m src.performance_eval.compare_case_metrics
+       --base_dir . --output_dir comparison_results/
 
-6. Visualize Episodes
-   python -m maritime_rl_pkg.batch_animate_eval <eval_dir>/
+6. Evaluate PPO + LLM integration
+   python -m src.eval_generalized_policy_sb3
+       --checkpoint <best>.zip --case N --episodes 100 --llm --llm_provider openai
+       --llm_interval 10 --llm_env_file third_party/CORALL/.env --save_histories
+         └─ results_llmapi_caseN_interval10/
+
+7. Evaluate LLM reliability
+   python -m src.llm_integration.eval_llm_reliability
+       --eval_dir results_llmapi_caseN_interval10/
+         └─ seed_0/results_llm_reliability/
+
+8. Generate trajectory and reliability figures
+   python -m src.visualizations.generate_trajectory_overlays ...
+   python -m src.llm_integration.plot_llm_reliability_table ...
 ```
+
+> **Note:** Steps 6–8 are evaluation-time extensions. The LLM is never used during PPO training and does not influence the trained policy weights.
+
+---
+
+## LLM Reliability Evaluation
+
+### Script: `eval_llm_reliability.py`
+
+The reliability evaluator operates on `llm_intent_log.csv` and scores one LLM decision per query interval. Rows belonging to the same query are collapsed and the highest-risk target is used as the primary encounter for reference scoring.
+
+Two primary metrics are reported:
+
+**Valid Intent Rate** — fraction of all LLM queries that both return successfully and produce a parseable maneuver intent:
+
+```
+Valid Intent Rate = N(successful response and parseable K_dir) / N(LLM queries)
+```
+
+This measures availability of usable LLM guidance and does not imply that the maneuver itself is geometrically correct.
+
+**Strict Action Accuracy** — for valid intents where the deterministic COLREGs/geometry reference defines a high-confidence single expected maneuver:
+
+```
+Strict Action Accuracy = N(correct parsed intents) / N(valid high-confidence single-label intents)
+```
+
+This metric measures agreement against the deterministic COLREGs reference rather than formal COLREGs compliance verification. The evaluator additionally records diagnostic metrics including parse success, maneuver consistency, per-rule accuracy, missed maneuvers, unnecessary maneuvers, and confusion counts.
 
 ---
 
@@ -343,3 +451,25 @@ All observations are padded to a consistent 29-dim vector for policy compatibili
 - CORALL simulator (in `third_party/`)
 
 See `requirements.txt` for full dependencies.
+
+---
+
+## Upstream Project and Attribution
+
+This work builds upon and adapts components of the **CORALL** framework developed for explainable COLREGs-compliant maritime collision avoidance:
+
+**CORALL:** https://github.com/Klins101/CORALL
+
+Components adapted or extended from CORALL include portions of the maritime encounter simulation, collision-risk formulation, COLREGs decision logic, and LLM decision-making infrastructure. The reinforcement-learning training pipeline, generalized PPO policy, procedural encounter generation, LLM-to-RL arbitration layer, and associated reliability evaluation were developed as extensions for this project.
+
+Users of this repository should also cite the original CORALL work where appropriate. See the repository license and any third-party license notices for attribution requirements associated with adapted CORALL source code.
+
+---
+
+## Citation
+
+If you use this repository, please cite the associated publication and the original CORALL work on which portions of the simulator and decision-making framework are based.
+
+### Upstream CORALL Repository
+
+https://github.com/Klins101/CORALL

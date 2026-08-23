@@ -1,3 +1,4 @@
+"""This module implements a multi-LLM COLREGs interpreter for maritime navigation decision-making."""
 import os
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Union

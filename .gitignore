@@ -274,3 +274,6 @@ videos/
 *.gif
 *.avi
 0_Training_Results/
+
+# Large archives
+*.zip

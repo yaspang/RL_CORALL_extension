@@ -1,3 +1,11 @@
+""" 
+Stores the canonical Imazu encounter geometry, with original relative positions an headings for 
+each of the 22 cases defined from CORALL.
+    -> Computes the single scale factor that maps original positions to fit around a 
+    desired centerline crossing distance.
+    -> Computes per-obstacle speeds to synchronize arrivals at the crossing point with ownship. 
+"""
+
 import numpy as np
 
 NMI = 1852.0
