@@ -8,7 +8,7 @@ LLM-Guided Reinforcement Learning for Maritime Collision Avoidance
 
 This repository provides a generalized Proximal Policy Optimization (PPO) policy for multi-ship maritime collision avoidance, an LLM-guided supervisory control layer that delivers explainable COLREGs maneuver intent during deployment, and a reliability evaluation framework for measuring LLM intent quality against a deterministic reference. It extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework.
 
-The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K&#8336;&#7433;&#7523; ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
+The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K_{dir} ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
 
 The project supports both fixed Imazu encounter geometries and procedurally generated multi-ship encounters.
 
