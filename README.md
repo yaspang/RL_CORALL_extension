@@ -42,22 +42,15 @@ LLM reliability results were computed over 9,507 total LLM queries across Cases 
 
 ---
 
-## Repository Results Structure
+## Result Data Availability
 
-The numbered directories under `results/` contain the frozen evaluation outputs used during final paper analysis. Source code is in `src/`; upstream CORALL components are retained under `third_party/CORALL/`.
-
-```
-results/
-  1_Baseline_Results_900s_100ep/    CORALL baseline evaluation results (100 ep/case, seed 0)
-  1_Policy_130847_CP_850K_results/  PPO checkpoint at 850K steps — reported evaluation outputs
-  1_comparison_results_850k/        Aggregated PPO vs. CORALL comparison metrics and figures
-```
+Full episode-level evaluation outputs and trajectory histories are not included in this repository because of their size. The aggregate results reported in the associated paper are summarized in the [Reported Results](#reported-results) section above. The pretrained PPO checkpoint used for evaluation is provided in `pretrained/`, and the included evaluation scripts can be used to regenerate the policy and CORALL baseline results.
 
 ---
 
 ## Pretrained Policy
 
-The pretrained Stable-Baselines3 PPO checkpoint used for the reported evaluation is provided as a GitHub release asset (`generalized_checkpoint_850000_steps.zip`).
+The pretrained Stable-Baselines3 PPO checkpoint used for the reported evaluation is included in this repository at `pretrained/generalized_checkpoint_850000_steps.zip`.
 
 - Training steps: 850,000
 - Observation: 29 dimensions
@@ -75,7 +68,7 @@ The reported policy results use the PPO checkpoint at 850,000 training steps. Ru
 
 ```bash
 python -m src.eval_generalized_policy_sb3 \
-    --checkpoint <path-to-850k-checkpoint.zip> \
+    --checkpoint pretrained/generalized_checkpoint_850000_steps.zip \
     --case 6 \
     --episodes 100 \
     --seed 0 \
@@ -107,7 +100,7 @@ python -m src.llm_integration.eval_llm_reliability \
     --eval_dir <LLM-evaluation-directory>
 ```
 
-Primary reported metrics: **Valid Intent Rate** and **Strict Action Accuracy**. Because LLM evaluation requires an external API, exact future responses may vary. Archived `llm_intent_log.csv` files in `results/` can be used to reproduce the reported reliability analysis without repeating API calls.
+Primary reported metrics: **Valid Intent Rate** and **Strict Action Accuracy**. LLM reliability metrics can be regenerated from `llm_intent_log.csv` files produced during an LLM-enabled evaluation run. Because these experiments rely on an external API, future call-level responses may differ from those reported in the paper.
 
 ---
 
