@@ -6,7 +6,7 @@ LLM-Guided Reinforcement Learning for Maritime Collision Avoidance
 
 ## Overview
 
-This project extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework with reinforcement learning (RL) training, evaluation, and LLM-guided supervisory control. A generalized Proximal Policy Optimization (PPO) policy is trained for multi-ship collision avoidance and path following, while an LLM-based decision module can provide high-level COLREGs maneuver intent during evaluation.
+This repository provides a generalized Proximal Policy Optimization (PPO) policy for multi-ship maritime collision avoidance, an LLM-guided supervisory control layer that delivers explainable COLREGs maneuver intent during deployment, and a reliability evaluation framework for measuring LLM intent quality against a deterministic reference. It extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework.
 
 The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K&#8336;&#7433;&#7523; ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
 
@@ -24,6 +24,92 @@ The project supports both fixed Imazu encounter geometries and procedurally gene
 - **LLM Reliability Evaluation:** Measures Valid Intent Rate and Strict Action Accuracy against a deterministic geometry/COLREGs reference
 - **Safety-Oriented Evaluation:** Collision rate, success rate, risk exposure, minimum separation, and completion time
 - **Constraint-Based Checkpoint Selection:** Collision-free and fully successful checkpoints prioritized before secondary metrics
+
+---
+
+## Reported Results
+
+The final PPO policy was evaluated over the fixed Imazu encounter set using 100 episodes per case.
+
+| Metric | Result |
+|---|---|
+| Collision rate | 0.0% |
+| Ownship success rate | 100.0% |
+| LLM valid intent rate | 72.7% |
+| LLM strict action accuracy | 96.0% |
+
+LLM reliability results were computed over 9,507 total LLM queries across Cases 1, 6, and 18. Strict action accuracy was evaluated on the high-confidence single-label subset.
+
+---
+
+## Repository Results Structure
+
+The numbered directories under `results/` contain the frozen evaluation outputs used during final paper analysis. Source code is in `src/`; upstream CORALL components are retained under `third_party/CORALL/`.
+
+```
+results/
+  1_Baseline_Results_900s_100ep/    CORALL baseline evaluation results (100 ep/case, seed 0)
+  1_Policy_130847_CP_850K_results/  PPO checkpoint at 850K steps — reported evaluation outputs
+  1_comparison_results_850k/        Aggregated PPO vs. CORALL comparison metrics and figures
+```
+
+---
+
+## Pretrained Policy
+
+The pretrained Stable-Baselines3 PPO checkpoint used for the reported evaluation is provided as a GitHub release asset (`generalized_checkpoint_850000_steps.zip`).
+
+- Training steps: 850,000
+- Observation: 29 dimensions
+- Action space: `MultiDiscrete([7, 5])` — heading (7 bins) + speed (5 bins)
+- Actor: [256, 256], Tanh
+- Critic: [256, 256], Tanh
+
+---
+
+## Reproducing the Reported Results
+
+### PPO Policy Evaluation
+
+The reported policy results use the PPO checkpoint at 850,000 training steps. Run for each Imazu case (1–22):
+
+```bash
+python -m src.eval_generalized_policy_sb3 \
+    --checkpoint <path-to-850k-checkpoint.zip> \
+    --case 6 \
+    --episodes 100 \
+    --seed 0 \
+    --desired_cross_x_nmi 1.0 \
+    --target_speed_mps 10.0 \
+    --ownship_speed_mps 10.0 \
+    --sim_time 900.0 \
+    --save_histories
+```
+
+Repeat with `--case N` for cases 1–22.
+
+### CORALL Baseline
+
+```bash
+python -m src.baseline_eval.eval_baseline_with_hist \
+    --case 6 \
+    --episodes 100 \
+    --seed 0 \
+    --save_histories
+```
+
+Repeat with `--case N` for cases 1–22.
+
+### LLM Reliability Evaluation
+
+```bash
+python -m src.llm_integration.eval_llm_reliability \
+    --eval_dir <LLM-evaluation-directory>
+```
+
+Primary reported metrics: **Valid Intent Rate** and **Strict Action Accuracy**. Because LLM evaluation requires an external API, exact future responses may vary. Archived `llm_intent_log.csv` files in `results/` can be used to reproduce the reported reliability analysis without repeating API calls.
+
+---
 
 ## LLM-Guided Control Architecture
 
