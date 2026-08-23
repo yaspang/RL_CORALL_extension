@@ -233,6 +233,7 @@ comparison_results/**/*.pkl
 # Visualizations (intermediate)
 Preliminary_Visualizations/**/
 **/*.png  # Exclude generated plots, but keep .md documentation with images
+!OCEANS_results/*.png
 
 # Large data files
 *.npz
