@@ -277,3 +277,4 @@ videos/
 
 # Large archives
 *.zip
+!pretrained/*.zip
