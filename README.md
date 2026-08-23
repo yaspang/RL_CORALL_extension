@@ -39,8 +39,9 @@ The performance of the pretrained RL PPO policy was evaluated in the full pipeli
 | LLM strict action accuracy | 96.0% |
 
 LLM reliability results were computed over 9,507 total LLM queries across Cases 1, 6, and 18. Strict action accuracy was evaluated on the high-confidence single-label subset.
-### PPO vs. CORALL Baseline — Scaling Analysis
-Across 2-, 3-, and 4-ship encounter complexities, the PPO policy consistently achieves 0% collision and 100% success. Compared to the CORALL reactive baseline, the RL policy completes routes ~52–54% faster with ~8% shorter paths and ~30–38% lower risk exposure. Minimum separation is lower than the baseline (which uses conservative reactive avoidance), but consistently remains above the collision threshold in all episodes.
+### PPO vs. CORALL Baseline 
+
+The performance of the pretrained RL PPO policy was also evaluated directly against the CORALL baseline over the fixed Imazu encounter set using 100 episodes per case (for all 22 cases). Across 2-, 3-, and 4-ship encounter complexities, the PPO policy consistently achieves 0% collision and 100% success. Compared to the CORALL reactive baseline, the RL policy completes routes ~52–54% faster with ~8% shorter paths and ~30–38% lower risk exposure. Minimum separation is lower than the baseline (which uses conservative reactive avoidance), but consistently remains above the collision threshold in all episodes.
 
 ![Scaling Analysis: RL vs Baseline Performance across Ship Count](OCEANS_results/scaling_analysis.png)
 ---
