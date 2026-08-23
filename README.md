@@ -10,12 +10,12 @@ This repository provides a generalized Proximal Policy Optimization (PPO) policy
 
 The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K_{dir} ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
 
-The project supports both fixed Imazu encounter geometries and procedurally generated multi-ship encounters.
+The policy is trained on procedurally generated multi-ship encounters and evaluated on fixed Imazu encounter cases.
 
 ### Key Features
 
 - **Generalized PPO Policy:** Single policy trained across multi-ship collision-avoidance encounters
-- **Two Training Modes:** Fixed Imazu case rotation (`RandomCaseEnv`) or procedurally randomized encounters (`RandomEncounterEnv`)
+- **Procedural Encounter Generation:** Randomized encounter geometry every episode for generalization (`RandomEncounterEnv`)
 - **Curriculum Learning:** Encounter complexity progresses from one target to as many as three targets
 - **29-Dimensional Observation Space:** Ownship, goal, and relative target-ship features
 - **Discrete Heading and Speed Control:** `MultiDiscrete([7, 5])` action space
@@ -29,7 +29,7 @@ The project supports both fixed Imazu encounter geometries and procedurally gene
 
 ## Reported Results
 
-The final PPO policy was evaluated over the fixed Imazu encounter set using 100 episodes per case.
+The performance of the pretrained RL PPO policy was evaluated in the full pipeline over the fixed Imazu encounter set using 100 episodes per case.
 
 | Metric | Result |
 |---|---|
@@ -150,43 +150,37 @@ K_dir = +1  -> starboard
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│           Single-Agent RL Training                              │
-│         (Multi-Agent Infrastructure)                            │
+│                   Single-Agent RL Training                     │
+│                 (Multi-Agent Infrastructure)                   │
 ├────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Agent 0 (Ownship) - RL Controlled                             │
-│  └─ PPO Policy from Stable-Baselines3                          │
-│     Action: MultiDiscrete([7, 5])                              │
-│       └─ Heading: 7 discrete bins                              │
-│       └─ Speed:   5 discrete bins                              │
-│     Observation: 29-dim normalized state vector                │
-│     Reward: 5-component shaping function                       │
-│                                                                 │
-└──────────────────────┬──────────────────────────────────────────┘
+│                                                                │
+│              Agent 0 (Ownship) - RL Controlled                 │
+│              └─ PPO Policy from Stable-Baselines3              │
+│                  Action: MultiDiscrete([7, 5])                 │
+│              └─ Heading: 7 discrete bins                       │
+│              └─ Speed:   5 discrete bins                       │
+│              Observation: 29-dim normalized state vector       │
+│              Reward: 4-term shaping function                   │
+│                                                                │
+└──────────────────────┬─────────────────────────────────────────┘
                        │
-        ┌──────────────┴──────────────────────────┐
-        │                                         │
-   ┌────▼───────────────────────────┐    ┌────────▼───────────────────┐
-   │ Mode A: Case-Based             │    │ Mode B: Procedural          │
-   │ RandomCaseEnv                  │    │ RandomEncounterEnv          │
-   │                                │    │                             │
-   │ Rotates across 22 fixed Imazu  │    │ Generates fully randomized  │
-   │ encounter geometries each      │    │ encounters each episode:    │
-   │ episode. Curriculum selects    │    │ - Target speed: 6–14 m/s   │
-   │ from 2-ship → 3-ship → 4-ship  │    │ - Angle: 15°–345°          │
-   │ cases as training progresses.  │    │ - Crossing dist: 1.0 ±20%  │
-   │                                │    │ - N obstacles: 1 → 1–2 →   │
-   │ Uses fixed Imazu geometry.     │    │   1–3 (curriculum by step)  │
-   └────────────────────────────────┘    └─────────────────────────────┘
-        │                                         │
-        └──────────────────┬──────────────────────┘
-                           │
+          ┌────────────▼─────────────────────────────┐
+          │ RandomEncounterEnv (Procedural)          │
+          │                                          │
+          │ Generates randomized encounters each     │
+          │ episode:                                 │
+          │ - Target speed: 6–14 m/s                 │
+          │ - Angle: 15°–345°                        │
+          │ - Crossing dist: 1.0 ±20%                │
+          │ - N obstacles: 1 → 1–2 → 1–3 (steps)     │
+          └──────────────────┬───────────────────────┘
+                             │
               SingleAgentOwnshipEnv
               (env_single_agent_sb3.py)
-                           │
+                             │
               env_multi_agent_ppo.py
               (PettingZoo, ownship only)
-                           │
+                             │
               PPO (Stable-Baselines3)
 ```
 
@@ -200,23 +194,15 @@ K_dir = +1  -> starboard
 - PettingZoo `ParallelEnv` supporting all agents
 - Agent 0 = ownship (RL-controlled); Agents 1–K = obstacles (scripted CORALL trajectories)
 - Handles vehicle dynamics, CPA computation, collision detection, per-agent reward shaping
-- Reward components: progress toward goal, risk penalty, separation bonus, collision penalty, success bonus
+- Reward components: conflict-scaled route progress, bounded geometry-based safety cost, hard collision penalty, and separation-dependent terminal success bonus
 - AABB broad-phase filtering available for 5+ agent scalability
 
 **2. Single-Agent Wrapper** (`env_single_agent_sb3.py`)
 - Wraps `env_multi_agent_ppo.py` into a single-agent Gymnasium interface (ownship only)
-- Used as the base environment for both training modes
+- Used as the base environment for training
 - Observation size varies by number of obstacles (14–26 dims before padding)
 
-**3. Case-Based Curriculum Wrapper** (`env_random_case_sb3.py`)
-- **Training mode**: `--cases` (Imazu cases 1–22)
-- Each episode samples a random case from the current curriculum phase:
-  - Phase 1 (0–500k steps): 2-ship cases only
-  - Phase 2 (500k–1M steps): 2-ship and 3-ship blend
-  - Phase 3 (1M–2.5M steps): All 22 cases (2/3/4-ship blend)
-- Observation padded to 29-dim for consistent policy input
-
-**4. Procedural Encounter Wrapper** (`env_procedural_encounter_sb3.py`)
+**3. Procedural Encounter Wrapper** (`env_procedural_encounter_sb3.py`)
 - **Training mode**: `--use_procedural_encounters`
 - Generates novel encounter geometry every episode using **backwards-from-crossing placement**:
   - Ownship travels east at fixed speed; crossing point is at `desired_cross_x_nmi` ahead
@@ -230,7 +216,7 @@ K_dir = +1  -> starboard
   - Steps 2M+: 1–3 targets
 - Verbose logging prints per-episode geometry: `episode=N n_obstacles=M ownship_speed=10.0 target_speeds=[V] crossing_x=C angles=[θ]`
 
-**5. Baseline Environment** (`env_baseline.py`)
+**4. Baseline Environment** (`env_baseline.py`)
 - CORALL's rule-based reactive avoidance guidance
 - Ownship controlled by CORALL waypoint planner + reactive avoidance
 - Obstacles follow fixed CORALL-scripted trajectories
@@ -268,17 +254,26 @@ The actor produces categorical heading and speed decisions, while the critic est
 - Episode horizon: `--sim_time 900.0` seconds (default)
 
 **Reward Function**:
-```python
-{
-    'progress':   200.0,   # Delta progress toward goal each step
-    'risk':       -15.0,   # Risk exposure penalty (CPA-based)
-    'separation':   2.0,   # Bonus for maintaining safe separation
-    'collision': -600.0,   # Terminal penalty on collision
-    'success':   250.0,    # Terminal bonus on reaching goal
-}
+
+$$R_t = \alpha_t \, w_p \, \Delta\rho_t - c_t^{\text{safe}} + b_t^{\text{goal}} + c_t^{\text{col}}$$
+
+where $w_p = 200$ weights normalized route progress. The progress reward is scaled by 0.5 during active collision conflicts. A bounded safety cost ($\leq 3$ per step) penalizes unsafe range and predicted DCPA/TCPA. Collision terminates the episode with a reward of $-10{,}000$. Goal completion receives a graduated bonus of +1000, +700, or +300 according to the minimum separation maintained throughout the episode.
+
+```
+Progress:   200 × Δ(route progress)
+            × 0.5 during active conflict, otherwise × 1.0
+
+Safety:     bounded [0, 3] penalty from
+            range + DCPA/TCPA geometry
+
+Collision:  −10,000 terminal reward
+
+Success:    +1000 if episode min separation ≥ 3 LOA
+            +700  if episode min separation ≥ 2 LOA
+            +300  otherwise
 ```
 
-**Mode A — Case-Based Training** (Imazu cases):
+**Training** (Procedural Encounters):
 ```bash
 python -m src.train_generalized_policy_sb3 \
     --num_steps 3000000 \
@@ -286,21 +281,6 @@ python -m src.train_generalized_policy_sb3 \
     --rollout_frag 256 \
     --lr 1e-4 \
     --master_seed 42 \
-    --ownship_speed_mps 10.0 \
-    --desired_cross_x_nmi 1.0 \
-    --sim_time 900.0 \
-    --checkpoint_freq 50000
-```
-
-**Mode B — Procedural Encounter Training** (recommended for generalization):
-```bash
-python -m src.train_generalized_policy_sb3 \
-    --num_steps 3000000 \
-    --train_batch 256 \
-    --rollout_frag 256 \
-    --lr 1e-4 \
-    --master_seed 42 \
-    --use_procedural_encounters \
     --ownship_speed_mps 10.0 \
     --desired_cross_x_nmi 1.0 \
     --sim_time 900.0 \
@@ -452,7 +432,7 @@ All observations are padded to a consistent 29-dim vector for policy compatibili
 ```
 1. Train PPO
    python -m src.train_generalized_policy_sb3
-       --use_procedural_encounters --num_steps 3000000 --sim_time 900.0 ...
+       --num_steps 3000000 --sim_time 900.0 ...
          └─ GENERALIZED_SB3_YYYYMMDD-HHMMSS/checkpoints/
 
 2. Rank Checkpoints

@@ -8,7 +8,8 @@ ARCHITECTURE:
 =============
 - ownship (agent_0): RL-controlled agent
 - obstacles (agents 1...K): scripted to maintain constant heading & speed
-- Reward function: inherited from MultiShipParallelEnv (collision penalty + waypoint progress)
+- Reward function: inherited from MultiShipParallelEnv (conflict-scaled route progress,
+  bounded geometry-based safety cost, hard collision penalty, graduated success bonus)
 - Observation: only ownship state (position, heading, speed, other ships' relative positions)
 
 PER-CASE GEOMETRY:
@@ -69,10 +70,10 @@ class SingleAgentOwnshipEnv(gym.Env):
        - No per-case scaling; full original geometry preserved
     
     4. Reward function (from MultiShipParallelEnv):
-       - Collision penalty: -10 if any agent separation < LOA
-       - Waypoint progress reward: +goal_progress per step
-       - CPA-based risk penalization
-       - Goal completion bonus
+       - Progress: 200 × Δ(route progress), ×0.5 during active conflict
+       - Safety cost: bounded [0, 3] per step from range + DCPA/TCPA geometry
+       - Collision: −10,000 terminal penalty
+       - Success: +1000/+700/+300 graduated by episode minimum separation
     
     args:
         case_number: CORALL case (1, 6, 21, etc.) - determines obstacle geometry

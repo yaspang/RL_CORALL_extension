@@ -16,7 +16,7 @@ positions above, so training is fully case-independent.
 Usage:
     env = RandomEncounterEnv(
         ownship_speed_mps=10.0,         # fixed across all episodes
-        target_speed_range=(7.0, 12.0), # randomly sampled each episode
+        target_speed_range=(6.0, 14.0), # randomly sampled each episode
         desired_cross_x_nmi=1.0,        # crossing distance (±20% jitter)
         master_seed=42,
         verbose=True,
@@ -70,7 +70,7 @@ class RandomEncounterEnv(gym.Wrapper):
     def __init__(
         self,
         ownship_speed_mps: float = 10.0,
-        target_speed_range: Tuple[float, float] = (7.0, 12.0),
+        target_speed_range: Tuple[float, float] = (6.0, 14.0),
         desired_cross_x_nmi: float = 1.0,
         # num_agents_curriculum: Optional[List[int]] = None
         dt: float = 0.5,
