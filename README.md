@@ -1,4 +1,4 @@
-# RL_CORALL_extension
+# Reinforcement Learning (RL) CORALL Extension
 
 LLM-Guided Reinforcement Learning for Maritime Collision Avoidance
 
