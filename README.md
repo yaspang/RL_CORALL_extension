@@ -29,7 +29,7 @@ The policy is trained on procedurally generated multi-ship encounters and evalua
 
 ## Reported Results
 
-The performance of the pretrained RL PPO policy was evaluated in the full pipeline over the fixed Imazu encounter set using 100 episodes per case.
+The pretrained PPO policy was evaluated over the fixed Imazu encounter set using 100 episodes per case.
 
 | Metric | Result |
 |---|---|
@@ -63,6 +63,62 @@ The pretrained Stable-Baselines3 PPO checkpoint used for the reported evaluation
 - Action space: `MultiDiscrete([7, 5])` — heading (7 bins) + speed (5 bins)
 - Actor: [256, 256], Tanh
 - Critic: [256, 256], Tanh
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/yaspang/RL_CORALL_extension.git
+cd RL_CORALL_extension
+```
+
+### 2. Create a virtual environment
+
+```bash
+python -m venv .venv
+```
+
+Linux/macOS:
+```bash
+source .venv/bin/activate
+```
+
+Windows:
+```powershell
+.venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
+python -m pip install --upgrade pip
+
+# General / latest compatible environment
+pip install -r requirements.txt
+
+# Reproduce the OCEANS 2026 software environment (Python 3.11.9, pinned core packages)
+pip install -r requirements-paper.txt
+```
+
+### 4. Verify the installation
+
+```bash
+python -m src.eval_generalized_policy_sb3 --help
+```
+
+### 5. LLM configuration
+
+An OpenAI API key is required for LLM-enabled evaluation. Copy the provided template and add your key:
+
+```bash
+cp third_party/CORALL/.env.example third_party/CORALL/.env
+# then edit third_party/CORALL/.env and set OPENAI_API_KEY=...
+```
+
+The pretrained PPO policy, CORALL baseline evaluation, and non-LLM policy evaluation do not require an API key.
 
 ---
 
@@ -133,7 +189,7 @@ The LLM is used as a supervisory intent source rather than as the primary low-le
                        Ownship
 ```
 
-The PPO policy receives only the environment observation and is not conditioned directly on K&#8336;&#7433;&#7523;. During evaluation, the LLM is queried periodically and produces a high-level maneuver recommendation. When a valid intent is available, the arbiter constrains the heading component of the PPO proposal to remain consistent with the prescribed maneuver direction. If the PPO heading is already compatible with the intent, the proposal is retained. If the LLM output is unavailable or invalid, control falls back to the PPO proposal; deterministic emergency safety logic retains higher authority.
+The PPO policy receives only the environment observation and is not conditioned directly on `K_dir`. During evaluation, the LLM is queried periodically and produces a high-level maneuver recommendation. When a valid intent is available, the arbiter constrains the heading component of the PPO proposal to remain consistent with the prescribed maneuver direction. If the PPO heading is already compatible with the intent, the proposal is retained. If the LLM output is unavailable or invalid, control falls back to the PPO proposal; deterministic emergency safety logic retains higher authority.
 
 ### LLM Inputs
 For target ships within the local encounter region (≤ 3 nmi), the LLM receives:
@@ -333,7 +389,7 @@ Evaluates a single checkpoint on a specific Imazu case.
 
 ```bash
 python -m src.eval_generalized_policy_sb3 \
-    --checkpoint GENERALIZED_SB3_YYYYMMDD-HHMMSS/checkpoints/generalized_checkpoint_300000_steps.zip \
+    --checkpoint pretrained/generalized_checkpoint_850000_steps.zip \
     --case 6 \
     --episodes 100 \
     --seed 0 \
@@ -508,10 +564,8 @@ This metric measures agreement against the deterministic COLREGs reference rathe
 
 ## Requirements
 
-- Python 3.8+
-- Stable-Baselines3 (PPO)
-- Gymnasium
-- NumPy, Pandas, Matplotlib
+- Python 3.8+ (paper results produced with Python 3.11.9)
+- Stable-Baselines3 2.8.0, PyTorch 2.10.0+cpu, NumPy 2.4.4, Gymnasium 1.3.0 (paper-tested environment)
 - tqdm, rich (optional — enables `progress_bar=True` during training)
 - CORALL simulator (in `third_party/`)
 
