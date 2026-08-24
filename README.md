@@ -50,6 +50,7 @@ The performance of the pretrained RL PPO policy was also evaluated directly agai
 Full episode-level evaluation outputs and trajectory histories are not included in this repository because of their size. The aggregate results reported in the associated paper are summarized in the [Reported Results](#reported-results) section above. The pretrained PPO checkpoint used for evaluation is provided in `pretrained/`, and the included evaluation scripts can be used to regenerate the policy and CORALL baseline results.
 
 The `paper_results/` directory contains the small frozen summary files needed to audit the reported numbers:
+- `case_metrics.csv` — per-case PPO vs. CORALL baseline metrics across all 22 Imazu cases (path length, travel time, min separation, risk exposure, collision/success rate); backing data for Fig. 4 in the paper
 - `llm_reliability_summary.csv` — Table I from the paper (Cases 1, 6, 18, Overall)
 
 ---
