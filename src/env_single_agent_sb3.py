@@ -4,31 +4,24 @@ Single-agent Gymnasium environment wrapper for Stable-Baselines3.
 This module converts the multi-agent PettingZoo environment (MultiShipParallelEnv) into a
 single-agent Gymnasium environment suitable for Stable-Baselines3 training.
 
-ARCHITECTURE:
-=============
+Architecture
+-------------
 - ownship (agent_0): RL-controlled agent
 - obstacles (agents 1...K): scripted to maintain constant heading & speed
 - Reward function: inherited from MultiShipParallelEnv (conflict-scaled route progress,
   bounded geometry-based safety cost, hard collision penalty, graduated success bonus)
 - Observation: only ownship state (position, heading, speed, other ships' relative positions)
 
-PER-CASE GEOMETRY:
-==================
-- Case 1: scale=1.0 (original Imazu distances, loose encounters)
-- Case 6: scale=0.75 (25% closer, medium difficulty)
-- Case 21: scale=0.5 (50% closer, tight encounters)
-- Waypoint distance: 2.0 NMI (3,704 m) ahead in initial heading direction
-- Obstacle speeds: uniform 9.5 m/s (normalized across all Imazu cases)
+Usage
+-----
+Used as the base environment by RandomEncounterEnv (procedural training) and
+ImazuCaseEnv (fixed-case evaluation). Instantiate directly with:
 
-USAGE:
-======
-Used by train_single_agent_sb3.py in the training loop. Instantiate with:
     env = SingleAgentOwnshipEnv(case_number=6, route_len_nmi=2.0, seed=0)
     obs, info = env.reset()
-    action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
 
-Compatible with Stable-Baselines3 PPO, SAC, DQN, and all standard Gymnasium RL algorithms.
+Compatible with Stable-Baselines3 PPO and all standard Gymnasium RL algorithms.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """
-LLM Intent Service — Stage 2: intent generation, separated from logging/arbitration.
+LLM Intent Service — Stage 2 LLM implementation: intent generation, separated from logging/arbitration.
 
-# CHANGED (new file): extracted the "generate an intent" responsibilities out of
+# Extracted the "generate an intent" responsibilities out of
 # LLMIntentLogger (llm_intent_logger.py), which used to extract geometry, run the
 # rule classifier, build the prompt, call the API, parse the answer, AND write CSV
 # rows all in one method. This service only creates/updates IntentCommand objects;

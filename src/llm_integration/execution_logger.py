@@ -1,10 +1,6 @@
 """
-Execution Logger — Stage 2: records what the RL policy proposed, what was
+Execution Logger — Records what the RL policy proposed, what was
 actually applied after arbitration, and the observed encounter context.
-
-# CHANGED (new file): previously LLMIntentLogger only recorded the LLM's
-# geometry/response (Stage 1, observational). This logger records the real
-# control connection: proposed_action vs. applied_action vs. active intent.
 """
 
 from __future__ import annotations

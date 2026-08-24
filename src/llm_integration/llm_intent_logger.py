@@ -1,5 +1,5 @@
 """
-LLM Intent Logger for RL evaluation pipeline — Stage 1: logging only.
+LLM Intent Logger for RL evaluation pipeline — Stage 1 LLM eval: logging only.
 
 At each LLM decision interval the logger:
   1. Computes per-TS encounter geometry from the live multi-agent environment.
@@ -29,11 +29,12 @@ if logger is not None and logger.should_log(step):
 # After all episodes:
 logger.save(seed_dir / "llm_intent_log.csv")
 """
+from __future__ import annotations
 
 import os
 import csv
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -132,7 +133,7 @@ def _is_error_response(response_text: str) -> bool:
     return any(marker in response_lower for marker in error_markers)
 
 
-# CHANGED: extracted from LLMIntentLogger._build_llm_prompt so llm_intent_service.py
+
 # (Stage 2) can build the same prompt without needing an LLMIntentLogger instance.
 def build_llm_prompt(active_feats: List[Dict]) -> str:
     """
@@ -215,7 +216,7 @@ def load_env_file(env_path: Optional[str] = None) -> bool:
 
 class LLMIntentLogger:
     """
-    Collects COLREGs intent records during RL evaluation (Stage 1: logging only).
+    Collects COLREGs intent records during RL evaluation (Stage 1 eval: logging only).
 
     Parameters
     ----------
@@ -255,12 +256,12 @@ class LLMIntentLogger:
         self.use_llm: bool = use_llm and _LLM_AVAILABLE
         self.interval_steps: int = max(1, int(round(interval_s / dt)))
         self._records: List[Dict] = []
-        self._interpreter: Optional[MultiLLMCOLREGSInterpreter] = None
+        self._interpreter: Any = None
 
         if self.use_llm:
             load_env_file(env_file)
             try:
-                self._interpreter = MultiLLMCOLREGSInterpreter(provider=provider)
+                self._interpreter = MultiLLMCOLREGSInterpreter(provider=provider or "openai")
                 print(f"[LLMIntentLogger] LLM provider ready: {provider or 'auto'}")
             except Exception as exc:
                 print(f"[LLMIntentLogger] WARNING: could not init LLM provider — {exc}")

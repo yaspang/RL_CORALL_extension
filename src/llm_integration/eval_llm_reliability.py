@@ -207,34 +207,6 @@ def _confusion_frame(strict_rows: List[Dict]) -> List[Dict]:
     return out
 
 
-def _macro_f1(strict_rows: List[Dict]) -> float:
-    labels = [-1, 0, 1]
-    f1s: List[float] = []
-
-    exp = np.array([int(r["expected_single"]) for r in strict_rows], dtype=int)
-    pred = np.array([int(r["parsed_kdir"]) for r in strict_rows], dtype=int)
-
-    for c in labels:
-        tp = int(np.sum((exp == c) & (pred == c)))
-        fp = int(np.sum((exp != c) & (pred == c)))
-        fn = int(np.sum((exp == c) & (pred != c)))
-
-        if tp == 0 and fp == 0 and fn == 0:
-            continue
-
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        if precision + recall == 0:
-            f1 = 0.0
-        else:
-            f1 = 2.0 * precision * recall / (precision + recall)
-        f1s.append(f1)
-
-    if not f1s:
-        return float("nan")
-    return float(np.mean(f1s))
-
-
 def evaluate_llm_reliability(
     eval_dir: Path,
     output_dir: Optional[Path] = None,
@@ -322,8 +294,6 @@ def evaluate_llm_reliability(
     strict_correct = sum(int(r["is_correct"]) for r in strict_calls)
     strict_acc = strict_correct / len(strict_calls) if strict_calls else float("nan")
 
-    macro_f1 = _macro_f1(strict_calls)
-
     # Safety-flavored error rates on strict subset.
     # expected +1 means avoidance expected.
     wrong_side = 0
@@ -391,7 +361,6 @@ def evaluate_llm_reliability(
         "maneuver_consistency_rate": (sum(int(r["is_correct"]) for r in scored_calls) / len(scored_calls)) if scored_calls else float("nan"),
         "strict_subset_calls": len(strict_calls),
         "strict_action_accuracy": strict_acc,
-        "strict_macro_f1": macro_f1,
         "post_cpa_violation_rate": (post_cpa_violation / len(strict_calls)) if strict_calls else float("nan"),
         "wrong_side_rate": (wrong_side / len(strict_calls)) if strict_calls else float("nan"),
         "missed_action_rate": (missed_action / len(strict_calls)) if strict_calls else float("nan"),
@@ -429,7 +398,6 @@ def evaluate_llm_reliability(
         print(f"Maneuver consistency rate: {summary['maneuver_consistency_rate']:.3f} ({sum(int(r['is_correct']) for r in scored_calls)}/{len(scored_calls)} scored calls)")
     if strict_calls:
         print(f"Strict accuracy: {strict_acc:.3f} ({strict_correct}/{len(strict_calls)})")
-        print(f"Strict macro-F1: {macro_f1:.3f}" if np.isfinite(macro_f1) else "Strict macro-F1: n/a")
     else:
         print("Strict accuracy: n/a (no strict calls)")
 

@@ -9,16 +9,16 @@ Usage
 
 Key arguments
 -------------
-  --case INT               Imazu case number (required)
-  --episodes INT           Episodes to run (default: 20)
-  --seed INT               Base random seed (default: 0)
-  --sim_time FLOAT         Episode horizon in seconds (default: 900.0)
-  --route_len_nmi FLOAT    Route length in nmi (default: 2.0)
-  --desired_cross_x_nmi F  Encounter crossing distance (default: 1.0)
-  --target_speed_mps F     Target vessel speed m/s (default: 10.0)
-  --ownship_speed_mps F    Ownship speed m/s (default: None = case native)
-  --save_histories         Save per-step NPZ histories for visualization
-  --output_dir STR         Output directory (default: corall_baseline_case<N>_<timestamp>)
+  --case (int)                   Imazu case number (required)
+  --episodes (int)               Episodes to run (default: 20)
+  --seed (int)                   Base random seed (default: 0)
+  --sim_time (float)             Episode horizon in seconds (default: 900.0)
+  --route_len_nmi (float)        Route length in nmi (default: 2.0)
+  --desired_cross_x_nmi (float)  Encounter crossing distance (default: 1.0)
+  --target_speed_mps (float)     Target vessel speed m/s (default: 10.0)
+  --ownship_speed_mps (float)    Ownship speed m/s (default: None = case native)
+  --save_histories               Save per-step NPZ histories for visualization
+  --output_dir (str)             Output directory (default: corall_baseline_case<N>_<timestamp>)
 
 Outputs
 -------
@@ -343,15 +343,6 @@ def main():
 
     print(f"\nSaved per-episode CSV to: {csv_path}")
     print(f"Saved summary JSON to: {summary_path}")
-
-    # Clean up Ray resources (if Ray was used)
-    try:
-        import ray
-        if ray.is_initialized():
-            ray.shutdown()
-    except ImportError:
-        pass  # Ray not installed, skip cleanup
-
 
 if __name__ == "__main__":
     main()

@@ -24,7 +24,7 @@ Requires
 
 Outputs
 -------
-  llm_reliability_table.png     IEEE-style table: Valid Intent / Strict Acc. /
+  llm_reliability_table.png     Table: Valid Intent / Strict Acc. /
                                   Missed / Unnecessary / Collision / Success
   llm_reliability_stacked_bar.png  Valid Intent vs No Valid Intent per case
 """

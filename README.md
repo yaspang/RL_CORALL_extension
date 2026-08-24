@@ -6,9 +6,9 @@ LLM-Guided Reinforcement Learning for Maritime Collision Avoidance
 
 ## Overview
 
-This repository provides a generalized Proximal Policy Optimization (PPO) policy for multi-ship maritime collision avoidance, an LLM-guided supervisory control layer that delivers explainable COLREGs maneuver intent during deployment, and a reliability evaluation framework for measuring LLM intent quality against a deterministic reference. It extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework.
+This repository provides a generalizedreinforcement learning (RL) Proximal Policy Optimization (PPO) policy for multi-ship maritime collision avoidance, an LLM-guided supervisory control layer that delivers explainable COLREGs maneuver intent during deployment, and a reliability evaluation framework for measuring LLM intent quality against a deterministic reference. It extends the [CORALL](https://github.com/Klins101/CORALL) maritime collision-avoidance framework.
 
-The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as K_{dir} ∈ {−1, 0, +1}, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the PPO-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
+The RL policy operates independently from the LLM and proposes discrete heading and speed actions from the observed encounter state. At specified decision intervals, the LLM evaluates nearby target-ship geometry and returns an explainable COLREGs maneuver intent, which is parsed as $K_{\mathrm{dir}} ∈ {−1, 0, +1}$, representing port, stand-on/maintain, and starboard maneuver guidance respectively. An arbitration layer then constrains the RL policy-proposed maneuver according to valid LLM intent and higher-priority safety logic before the final action is applied to the ownship.
 
 The policy is trained on procedurally generated multi-ship encounters and evaluated on fixed Imazu encounter cases.
 
@@ -20,7 +20,7 @@ The policy is trained on procedurally generated multi-ship encounters and evalua
 - **29-Dimensional Observation Space:** Ownship, goal, and relative target-ship features
 - **Discrete Heading and Speed Control:** `MultiDiscrete([7, 5])` action space
 - **LLM-Guided Maneuver Intent:** COLREGs reasoning based on range, DCPA, TCPA, relative bearing, and collision risk
-- **Intent-Action Arbitration:** Valid LLM intent constrains the PPO-proposed heading direction without directly modifying the PPO network input
+- **Intent-Action Arbitration:** Valid LLM intent constrains the RL policy-proposed heading direction without directly modifying the policy network input
 - **LLM Reliability Evaluation:** Measures Valid Intent Rate and Strict Action Accuracy against a deterministic geometry/COLREGs reference
 - **Safety-Oriented Evaluation:** Collision rate, success rate, risk exposure, minimum separation, and completion time
 - **Constraint-Based Checkpoint Selection:** Collision-free and fully successful checkpoints prioritized before secondary metrics
@@ -41,7 +41,7 @@ The pretrained PPO policy was evaluated over the fixed Imazu encounter set using
 LLM reliability results were computed over 9,507 total LLM queries across Cases 1, 6, and 18. Strict action accuracy was evaluated on the high-confidence single-label subset.
 ### PPO vs. CORALL Baseline 
 
-The performance of the pretrained RL PPO policy was also evaluated directly against the CORALL baseline over the fixed Imazu encounter set using 100 episodes per case (for all 22 cases). Across 2-, 3-, and 4-ship encounter complexities, the PPO policy consistently achieves 0% collision and 100% success. Compared to the CORALL reactive baseline, the RL policy completes routes ~52–54% faster with ~8% shorter paths and ~30–38% lower risk exposure. Minimum separation is lower than the baseline (which uses conservative reactive avoidance), but consistently remains above the collision threshold in all episodes.
+The performance of the pretrained RL PPO policy was also evaluated directly against the CORALL baseline over the fixed Imazu encounter set using 100 episodes per case (for all 22 cases). Across 2-, 3-, and 4-ship encounter complexities, the RL policy consistently achieves 0% collision and 100% success. Compared to the CORALL reactive baseline, the RL policy completes routes ~52–54% faster with ~8% shorter paths and ~30–38% lower risk exposure. Minimum separation is lower than the baseline (which uses conservative reactive avoidance), but consistently remains above the collision threshold in all episodes.
 
 ---
 
@@ -119,13 +119,13 @@ cp third_party/CORALL/.env.example third_party/CORALL/.env
 # then edit third_party/CORALL/.env and set OPENAI_API_KEY=...
 ```
 
-The pretrained PPO policy, CORALL baseline evaluation, and non-LLM policy evaluation do not require an API key.
+The pretrained RL PPO policy, CORALL baseline evaluation, and non-LLM policy evaluation do not require an API key.
 
 ---
 
 ## Reproducing the Reported Results
 
-### PPO Policy Evaluation
+### Reinforcement Learning Policy Evaluation
 
 The reported policy results use the PPO checkpoint at 850,000 training steps. Run for each Imazu case (1–22):
 
@@ -176,7 +176,7 @@ The LLM is used as a supervisory intent source rather than as the primary low-le
                      /             \
                     /               \
                    v                 v
-             PPO Policy       LLM Decision Module
+             RL PPO Policy     LLM Decision Module
                    |                 |
           Proposed action       Parsed intent
          [heading, speed]          K_dir
@@ -190,7 +190,7 @@ The LLM is used as a supervisory intent source rather than as the primary low-le
                        Ownship
 ```
 
-The PPO policy receives only the environment observation and is not conditioned directly on `K_dir`. During evaluation, the LLM is queried periodically and produces a high-level maneuver recommendation. When a valid intent is available, the arbiter constrains the heading component of the PPO proposal to remain consistent with the prescribed maneuver direction. If the PPO heading is already compatible with the intent, the proposal is retained. If the LLM output is unavailable or invalid, control falls back to the PPO proposal; deterministic emergency safety logic retains higher authority.
+The RL PPO policy receives only the environment observation and is not conditioned directly on `K_dir`. During evaluation, the LLM is queried periodically and produces a high-level maneuver recommendation. When a valid intent is available, the arbiter constrains the heading component of the RL policy proposal to remain consistent with the prescribed maneuver direction. If the RL policy heading is already compatible with the intent, the proposal is retained. If the LLM output is unavailable or invalid, control falls back to the PPO proposal; deterministic emergency safety logic retains higher authority.
 
 ### LLM Inputs
 For target ships within the local encounter region (≤ 3 nmi), the LLM receives:
@@ -220,7 +220,7 @@ K_dir = +1  -> starboard
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
 │              Agent 0 (Ownship) - RL Controlled                 │
-│              └─ PPO Policy from Stable-Baselines3              │
+│              └─ RL PPO Policy from Stable-Baselines3           │
 │                  Action: MultiDiscrete([7, 5])                 │
 │              └─ Heading: 7 discrete bins                       │
 │              └─ Speed:   5 discrete bins                       │
@@ -285,9 +285,9 @@ K_dir = +1  -> starboard
 - Obstacles follow fixed CORALL-scripted trajectories
 - Used for fair side-by-side comparison with RL policy
 
-## PPO Network Architecture
+## Reinforcement Learning PPO Network Architecture
 
-The PPO policy is implemented using Stable-Baselines3 `MlpPolicy`. The actor and critic use separate feed-forward hidden branches, each with two fully connected layers of 256 neurons and Tanh activation.
+The RL PPO policy is implemented using Stable-Baselines3 `MlpPolicy`. The actor and critic use separate feed-forward hidden branches, each with two fully connected layers of 256 neurons and Tanh activation.
 
 ```
 PPO Policy from Stable-Baselines3
@@ -580,7 +580,7 @@ This work builds upon and adapts components of the **CORALL** framework develope
 
 **CORALL:** https://github.com/Klins101/CORALL
 
-Components adapted or extended from CORALL include portions of the maritime encounter simulation, collision-risk formulation, COLREGs decision logic, and LLM decision-making infrastructure. The reinforcement-learning training pipeline, generalized PPO policy, procedural encounter generation, LLM-to-RL arbitration layer, and associated reliability evaluation were developed as extensions for this project.
+Components adapted or extended from CORALL include portions of the maritime encounter simulation, collision-risk formulation, COLREGs decision logic, and LLM decision-making infrastructure. The reinforcement-learning training pipeline, generalized RL PPO policy, procedural encounter generation, LLM-to-RL arbitration layer, and associated reliability evaluation were developed as extensions for this project.
 
 Users of this repository should also cite the original CORALL work where appropriate. See the repository license and any third-party license notices for attribution requirements associated with adapted CORALL source code.
 

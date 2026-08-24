@@ -670,50 +670,26 @@ def main():
         model.save(str(final_path))
         print(f"\n✓ Final model saved to: {final_path}")
         
-        # Plot training convergence (using normalized returns for cleaner visualization)
-        print(f"\nGenerating convergence plots...")
-        
-        # Plot training convergence (using normalized returns for cleaner visualization)
-        print(f"\nGenerating convergence plots...")
-        
-        # Try raw plot first (more stable than normalized early on)
+        print(f"\nGenerating convergence plot...")
         raw_valid = [x for x in metrics_callback.train_returns if np.isfinite(x)]
-        norm_valid = [x for x in metrics_callback.train_returns_normalized if np.isfinite(x)]
         
         if len(raw_valid) > 0:
-            # Plot raw returns (with overall line and trend) - NO NORMALIZATION
             plot_training_convergence(
-                metrics_callback.timesteps, 
-                metrics_callback.train_returns_normalized,  # dummy param
+                metrics_callback.timesteps,
+                metrics_callback.train_returns_normalized,  # unused dummy (use_raw_for_plot=True)
                 metrics_callback.val_returns,
                 output_dir / "training_convergence_raw.png",
-                returns_2ship_normalized=metrics_callback.returns_2ship_normalized,  # dummy
-                returns_3ship_normalized=metrics_callback.returns_3ship_normalized,  # dummy
-                returns_4ship_normalized=metrics_callback.returns_4ship_normalized,  # dummy
-                train_returns_raw=metrics_callback.train_returns,  # REAL RAW DATA
-                returns_2ship_raw=metrics_callback.returns_2ship,  # REAL RAW DATA
-                returns_3ship_raw=metrics_callback.returns_3ship,  # REAL RAW DATA
-                returns_4ship_raw=metrics_callback.returns_4ship,  # REAL RAW DATA
-                use_raw_for_plot=True,  # Use raw, not normalized
+                returns_2ship_normalized=metrics_callback.returns_2ship_normalized,
+                returns_3ship_normalized=metrics_callback.returns_3ship_normalized,
+                returns_4ship_normalized=metrics_callback.returns_4ship_normalized,
+                train_returns_raw=metrics_callback.train_returns,
+                returns_2ship_raw=metrics_callback.returns_2ship,
+                returns_3ship_raw=metrics_callback.returns_3ship,
+                returns_4ship_raw=metrics_callback.returns_4ship,
+                use_raw_for_plot=True,
                 show_overall=True
             )
-        
-        if len(norm_valid) > 0:
-            # Plot normalized returns per scenario type for reference
-            plot_training_convergence(
-                metrics_callback.timesteps, 
-                metrics_callback.train_returns_normalized,  # NORMALIZED DATA
-                metrics_callback.val_returns,
-                output_dir / "training_convergence_normalized.png",
-                returns_2ship_normalized=metrics_callback.returns_2ship_normalized,  # NORMALIZED DATA
-                returns_3ship_normalized=metrics_callback.returns_3ship_normalized,  # NORMALIZED DATA
-                returns_4ship_normalized=metrics_callback.returns_4ship_normalized,  # NORMALIZED DATA
-                train_returns_raw=metrics_callback.train_returns,  # raw for reference only
-                use_raw_for_plot=False,  # Use normalized
-                show_overall=False
-            )
-        
-        if len(raw_valid) == 0 and len(norm_valid) == 0:
+        else:
             print("  No valid training data to plot!")
         
         # Save training config

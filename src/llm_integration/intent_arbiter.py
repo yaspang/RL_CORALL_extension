@@ -1,5 +1,5 @@
 """
-Intent Action Arbiter — Stage 2: validates/constrains the RL action using the
+Intent Action Arbiter — Validates/constrains the RL action using the
 active LLM intent before it reaches env.step() (item 4: apply intent before step).
 
 Order of authority (item 6):
@@ -52,7 +52,7 @@ class IntentActionArbiter:
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         applied = np.asarray(proposed_action, dtype=np.int32).copy()
 
-        # ── Priority 1: deterministic emergency supervisor (item 6) ─────────
+        # ── Priority 1: deterministic emergency supervisor ─────────
         emergency = self._check_emergency(multi_env)
         if emergency is not None:
             target_bearing_deg, min_dist_nmi, max_risk = emergency
