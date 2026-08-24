@@ -50,6 +50,9 @@ The performance of the pretrained RL PPO policy was also evaluated directly agai
 
 Full episode-level evaluation outputs and trajectory histories are not included in this repository because of their size. The aggregate results reported in the associated paper are summarized in the [Reported Results](#reported-results) section above. The pretrained PPO checkpoint used for evaluation is provided in `pretrained/`, and the included evaluation scripts can be used to regenerate the policy and CORALL baseline results.
 
+The `paper_results/` directory contains the small frozen summary files needed to audit the reported numbers:
+- `llm_reliability_summary.csv` — Table I from the paper (Cases 1, 6, 18, Overall)
+
 ---
 
 ## Pretrained Policy
@@ -141,6 +144,8 @@ For target ships within the local encounter region (≤ 3 nmi), the LLM receives
 - Encounter phase
 - Deterministic COLREGs rule hint (from CORALL `decision_making()`)
 
+> **Note:** The rule hint is passed as part of the prompt with the instruction to use it unless numeric encounter data clearly contradicts it. The 96.0% strict action accuracy therefore measures agreement with this deterministic reference rather than independent COLREGs verification.
+
 The LLM response contains a proposed maneuver, the applicable COLREGs rule, and supporting rationale. The maneuver is parsed to:
 ```
 K_dir = -1  -> port
@@ -182,7 +187,7 @@ K_dir = +1  -> starboard
               SingleAgentOwnshipEnv
               (env_single_agent_sb3.py)
                              │
-              env_multi_agent_ppo.py
+              env_RL_ppo.py
               (PettingZoo, ownship only)
                              │
               PPO (Stable-Baselines3)
@@ -194,30 +199,28 @@ K_dir = +1  -> starboard
 
 ### Core Environments
 
-**1. Multi-Agent Base Environment** (`env_multi_agent_ppo.py`)
+**1. Multi-Agent Base Environment** (`env_RL_ppo.py`)
 - PettingZoo `ParallelEnv` supporting all agents
 - Agent 0 = ownship (RL-controlled); Agents 1–K = obstacles (scripted CORALL trajectories)
 - Handles vehicle dynamics, CPA computation, collision detection, per-agent reward shaping
 - Reward components: conflict-scaled route progress, bounded geometry-based safety cost, hard collision penalty, and separation-dependent terminal success bonus
-- AABB broad-phase filtering available for 5+ agent scalability
 
 **2. Single-Agent Wrapper** (`env_single_agent_sb3.py`)
-- Wraps `env_multi_agent_ppo.py` into a single-agent Gymnasium interface (ownship only)
+- Wraps `env_RL_ppo.py` into a single-agent Gymnasium interface (ownship only)
 - Used as the base environment for training
 - Observation size varies by number of obstacles (14–26 dims before padding)
 
 **3. Procedural Encounter Wrapper** (`env_procedural_encounter_sb3.py`)
-- **Training mode**: `--use_procedural_encounters`
 - Generates novel encounter geometry every episode using **backwards-from-crossing placement**:
   - Ownship travels east at fixed speed; crossing point is at `desired_cross_x_nmi` ahead
   - `t_cross = cross_x_m / ownship_speed_mps` — time for ownship to reach crossing
   - Each obstacle: sample speed (6–14 m/s) and angle θ (15°–345°), compute start as `t_cross` back along θ from crossing point
   - Guarantees all ships arrive at crossing simultaneously, producing genuine encounter geometry
 - No fixed Imazu geometry used — every episode is unique
-- Curriculum by training step:
-  - Steps 0–999k: 1 target
-  - Steps 1M–1.999M: 1–2 targets
-  - Steps 2M+: 1–3 targets
+- Stochastic mixed curriculum by training step:
+  - Steps 0–250k: 80% one target, 15% two targets, 5% three targets
+  - Steps 250k–750k: 60% one target, 30% two targets, 10% three targets
+  - Steps 750k+: 40% one target, 40% two targets, 20% three targets
 - Verbose logging prints per-episode geometry: `episode=N n_obstacles=M ownship_speed=10.0 target_speeds=[V] crossing_x=C angles=[θ]`
 
 **4. Baseline Environment** (`env_baseline.py`)
@@ -257,11 +260,11 @@ The actor produces categorical heading and speed decisions, while the critic est
 - Gamma: `0.99` | GAE Lambda: `0.95` | Clip range: `0.2`
 - Episode horizon: `--sim_time 900.0` seconds (default)
 
-**Reward Function**:
+**Reward Function** (Eq. 7–16 in the associated paper):
 
-$$R_t = \alpha_t \, w_p \, \Delta\rho_t - c_t^{\text{safe}} + b_t^{\text{goal}} + c_t^{\text{col}}$$
+$$r_t = \begin{cases} -10{,}000 & d_{\min} < L \text{ (collision)} \\\ \alpha_t\, w_p\, \Delta\rho_t - r_t^{\text{safe}} + r_t^{\text{goal}} & \text{otherwise} \end{cases}$$
 
-where $w_p = 200$ weights normalized route progress. The progress reward is scaled by 0.5 during active collision conflicts. A bounded safety cost ($\leq 3$ per step) penalizes unsafe range and predicted DCPA/TCPA. Collision terminates the episode with a reward of $-10{,}000$. Goal completion receives a graduated bonus of +1000, +700, or +300 according to the minimum separation maintained throughout the episode.
+where $w_p = 200$, $\alpha_t = 0.5$ during an active conflict and $1.0$ otherwise, $r_t^{\text{safe}} \in [0, 3]$ is a bounded geometry-based safety cost from range and predicted DCPA/TCPA, and $r_t^{\text{goal}}$ is a graduated terminal success bonus.
 
 ```
 Progress:   200 × Δ(route progress)

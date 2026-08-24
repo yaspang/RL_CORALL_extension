@@ -1,0 +1,5 @@
+case,n_calls,valid_intent_rate,strict_subset_calls,strict_action_accuracy,missed_action_rate,unnecessary_maneuver_rate,collision_rate,success_rate
+1,3175,0.649,2062,1.000,0.000,0.000,0.000,1.000
+6,3172,0.795,2274,0.919,0.000,0.081,0.000,1.000
+18,3160,0.736,2186,0.966,0.025,0.009,0.000,1.000
+Overall,9507,0.727,6522,0.960,0.008,0.031,0.000,1.000

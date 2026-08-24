@@ -151,8 +151,10 @@ def parse_args():
         action="store_true",
         default=False,
         help=(
-            "Enable LLM intent logging alongside the RL policy (Stage 1: "
-            "logging only — the PPO policy is unchanged). "
+            "Enable LLM-guided supervisory intent during evaluation. "
+            "The LLM is queried at --llm_interval second intervals; parsed "
+            "intent K_dir constrains the RL policy heading via the arbiter "
+            "before env.step() is called. "
             "Requires OPENAI_API_KEY or CLAUDE_API_KEY in environment / "
             "third_party/CORALL/.env. "
             "NOTE: LLM API calls add ~1-5 s per call. For large episode "

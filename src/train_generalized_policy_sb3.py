@@ -10,7 +10,7 @@ Key arguments
 -------------
   --num_steps (int)             Total training timesteps (default: 1 000 000)
   --checkpoint_freq (int)       Save checkpoint every N steps (default: 50 000)
-  --train_batch (int)           PPO minibatch size (default: 512)
+  --train_batch (int)           PPO minibatch size (default: 256)
   --rollout_frag (int)          Rollout fragment per update (default: 256)
   --lr (float)                  Learning rate (default: 1e-4)
   --sim_time (float)            Episode horizon in seconds (default: 900.0)
@@ -497,7 +497,7 @@ def main():
                         help="Learning rate (default: 1e-4)")
     parser.add_argument("--gamma", type=float, default=0.99,
                         help="Discount factor (default: 0.99)")
-    parser.add_argument("--train_batch", type=int, default=512,
+    parser.add_argument("--train_batch", type=int, default=256,
                         help="Training batch size (default: 512)")
     parser.add_argument("--rollout_frag", type=int, default=256,
                         help="Rollout fragment length (default: 256)")
